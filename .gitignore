@@ -1,0 +1,23 @@
+# Rust
+target/
+Cargo.lock
+
+# Node
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ScrubChef
+ui/dist/
+engine/target/
