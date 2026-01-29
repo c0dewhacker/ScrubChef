@@ -428,6 +428,16 @@ function App() {
             <HelpCircle size={14} className="text-[#38bdf8] group-hover:rotate-12 transition-transform" />
             About
           </button>
+          <a
+            href={`https://github.com/c0dewhacker/ScrubChef/releases/download/v${__APP_VERSION__}/ScrubChef-${__APP_VERSION__}.html`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 px-4 py-2 bg-[#38bdf8]/10 hover:bg-[#38bdf8]/20 rounded-xl border border-[#38bdf8]/20 text-[#38bdf8] hover:text-white transition-all text-[10px] uppercase tracking-widest font-bold group"
+            title="Download portable HTML version"
+          >
+            <Download size={14} className="group-hover:-translate-y-0.5 transition-transform" />
+            Download
+          </a>
           <div className="flex items-center gap-2 px-4 py-2 bg-gray-800/50 rounded-xl border border-gray-700/50">
             <span className="text-gray-400">Redactions:</span>
             <span className="font-mono font-bold text-purple-400">{totalRedactions}</span>
