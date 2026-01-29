@@ -9,7 +9,6 @@ use sha2::Sha256;
 struct ClaimedRegion {
     start: usize,
     end: usize,
-    replacement: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -205,7 +204,6 @@ impl Engine {
         self.claimed_regions.push(ClaimedRegion {
             start,
             end: end_bounded,
-            replacement: replacement.clone(),
         });
 
         Ok(result)
@@ -354,7 +352,6 @@ impl Engine {
             self.claimed_regions.push(ClaimedRegion {
                 start,
                 end,
-                replacement: replacement.clone(),
             });
         }
 
@@ -509,7 +506,6 @@ impl Engine {
             self.claimed_regions.push(ClaimedRegion {
                 start,
                 end,
-                replacement: replacement.clone(),
             });
         }
 
@@ -589,7 +585,6 @@ impl Engine {
             self.claimed_regions.push(ClaimedRegion {
                 start,
                 end,
-                replacement: replacement.clone(),
             });
         }
 
