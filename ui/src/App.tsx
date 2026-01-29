@@ -23,7 +23,7 @@ import { Token } from './components/Token';
 import { DiffView } from './components/DiffView';
 import { Download, Upload, LayoutTemplate, Trash2, Shield, HelpCircle, X } from 'lucide-react';
 import { EXAMPLE_RECIPES } from './data/exampleRecipes';
-import EngineWorker from './utils/engineWorker?worker';
+import EngineWorker from './utils/engineWorker?worker&inline';
 
 export interface Step {
   id: string;
@@ -743,9 +743,9 @@ function App() {
       {showAboutModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 animate-in fade-in duration-300">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-md" onClick={() => setShowAboutModal(false)} />
-          <div className="relative w-full max-w-xl bg-[#0f172a]/95 border border-white/10 rounded-3xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
-            <div className="p-8">
-              <div className="flex items-center justify-between mb-8">
+          <div className="relative w-full max-w-2xl bg-[#0f172a]/95 border border-white/10 rounded-[2.5rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="p-12">
+              <div className="flex items-center justify-between mb-12">
                 <div className="flex items-center gap-4">
                   <div className="w-12 h-12 bg-[#38bdf8]/10 rounded-2xl flex items-center justify-center border border-[#38bdf8]/20">
                     <img src={logo} className="w-8 h-8 object-contain" alt="ScrubChef" />
@@ -763,23 +763,23 @@ function App() {
                 </button>
               </div>
 
-              <div className="space-y-6">
+              <div className="space-y-10">
                 <section>
-                  <h3 className="text-[#38bdf8] text-[10px] uppercase font-bold tracking-[0.2em] mb-2">Developed By</h3>
-                  <div className="bg-white/5 border border-white/5 rounded-2xl p-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#38bdf8] to-purple-500 flex items-center justify-center font-bold text-xs">C</div>
+                  <h3 className="text-[#38bdf8] text-[10px] uppercase font-black tracking-[0.25em] mb-4 opacity-80">Developed By</h3>
+                  <div className="bg-white/5 border border-white/5 rounded-[2rem] p-8 transition-colors hover:bg-white/[0.07]">
+                    <div className="flex items-center gap-5">
+                      <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#38bdf8] to-purple-500 flex items-center justify-center font-bold text-base shadow-xl shadow-[#38bdf8]/20">C</div>
                       <div>
-                        <div className="text-sm font-bold text-white">c0dewhacker</div>
-                        <div className="text-[10px] text-[#9ca3af]">https://github.com/c0dewhacker/ScrubChef</div>
+                        <div className="text-base font-bold text-white tracking-wide">c0dewhacker</div>
+                        <div className="text-xs text-[#9ca3af] font-medium opacity-70 mt-0.5">https://github.com/c0dewhacker/ScrubChef</div>
                       </div>
                     </div>
                   </div>
                 </section>
 
                 <section>
-                  <h3 className="text-[#38bdf8] text-[10px] uppercase font-bold tracking-[0.2em] mb-2">What is ScrubChef?</h3>
-                  <div className="text-sm text-[#9ca3af] leading-relaxed bg-white/5 border border-white/5 rounded-2xl p-4">
+                  <h3 className="text-[#38bdf8] text-[10px] uppercase font-black tracking-[0.25em] mb-4 opacity-80">What is ScrubChef?</h3>
+                  <div className="text-sm text-[#9ca3af] leading-relaxed bg-white/5 border border-white/5 rounded-[2rem] p-8 font-medium">
                     ScrubChef is a high-performance, local-first redaction engine. Using a Rust-compiled WASM core, it processes logs and documents entirely in your browser. No data ever leaves your session, providing a truly air-gapped experience for handling sensitive PII and secrets.
                   </div>
                 </section>
@@ -797,10 +797,10 @@ function App() {
                 </section>
               </div>
 
-              <div className="mt-8 pt-6 border-t border-white/5">
+              <div className="mt-12 pt-10 border-t border-white/5">
                 <button
                   onClick={() => setShowAboutModal(false)}
-                  className="w-full py-3 bg-[#38bdf8] hover:bg-[#0ea5e9] text-white font-bold rounded-2xl transition-all shadow-lg active:scale-[0.98]"
+                  className="w-full py-5 bg-[#38bdf8] hover:bg-[#0ea5e9] text-white font-bold rounded-2xl transition-all shadow-2xl shadow-[#38bdf8]/20 active:scale-[0.99] text-base tracking-wide"
                 >
                   Get Started
                 </button>
