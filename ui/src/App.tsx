@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import logo from '../public/logo.svg'
 declare const __APP_VERSION__: string;
 import {
   DndContext,
@@ -740,7 +741,7 @@ function App() {
               <div className="flex items-center justify-between mb-8">
                 <div className="flex items-center gap-4">
                   <div className="w-12 h-12 bg-[#38bdf8]/10 rounded-2xl flex items-center justify-center border border-[#38bdf8]/20">
-                    <img src="/logo.svg" className="w-8 h-8 object-contain" alt="ScrubChef" />
+                    <img src={logo} className="w-8 h-8 object-contain" alt="ScrubChef" />
                   </div>
                   <div>
                     <h2 className="text-2xl font-bold text-white tracking-tight">ScrubChef</h2>
