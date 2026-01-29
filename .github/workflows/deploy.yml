@@ -84,6 +84,7 @@ jobs:
           tag_name: v${{ steps.vars.outputs.version }}
           name: ScrubChef v${{ steps.vars.outputs.version }}
           body: "ScrubChef v${{ steps.vars.outputs.version }} Standalone Release."
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

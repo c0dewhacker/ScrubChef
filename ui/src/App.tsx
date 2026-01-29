@@ -410,10 +410,17 @@ function App() {
         </div>
         <div className="flex-1" />
         <div className="flex items-center gap-6 text-sm">
-          <div className="flex items-center gap-2 px-4 py-2 bg-green-500/10 rounded-xl border border-green-500/20 text-green-400 font-bold text-[10px] uppercase tracking-wider animate-in fade-in duration-700">
-            <Shield size={14} className="animate-pulse" />
-            Local Safe Mode
-          </div>
+          {window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.protocol === 'file:' ? (
+            <div className="flex items-center gap-2 px-4 py-2 bg-green-500/10 rounded-xl border border-green-500/20 text-green-400 font-bold text-[10px] uppercase tracking-wider animate-in fade-in duration-700">
+              <Shield size={14} className="animate-pulse" />
+              Local Safe Mode
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 px-4 py-2 bg-blue-500/10 rounded-xl border border-blue-500/20 text-blue-400 font-bold text-[10px] uppercase tracking-wider animate-in fade-in duration-700">
+              <Shield size={14} className="animate-pulse" />
+              Web Safe Mode
+            </div>
+          )}
           <button
             onClick={() => setShowAboutModal(true)}
             className="flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10 rounded-xl border border-white/10 text-white/70 hover:text-white transition-all text-[10px] uppercase tracking-widest font-bold group"
