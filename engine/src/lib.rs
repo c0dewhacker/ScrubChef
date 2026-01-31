@@ -63,8 +63,10 @@ impl Engine {
         let config: PipelineConfig = serde_json::from_str(config_json)
             .map_err(|e| JsValue::from_str(&format!("Invalid pipeline config: {}", e)))?;
 
-        // Reset claimed regions for new pipeline run
+        // Reset all state for new pipeline run to ensure fresh statistics
         self.claimed_regions.clear();
+        self.canonical_map.clear();
+        self.next_ids.clear();
         
         let mut current_text = input.to_string();
         
@@ -76,6 +78,10 @@ impl Engine {
     }
 
     fn execute_step(&mut self, step: &StepConfig, text: &str) -> Result<String, JsValue> {
+        // Reset claimed regions for current step. Since the string is modified sequentially,
+        // previous coordinates are no longer valid for the modified text.
+        self.claimed_regions.clear();
+
         // Store the custom label for this step's type prefix
         let type_prefix = if let Some(label) = &step.label {
             if !label.is_empty() {
@@ -372,8 +378,10 @@ impl Engine {
             return Ok(text.to_string());
         }
 
-        let regex = Regex::new(pattern)
-            .map_err(|e| JsValue::from_str(&format!("Invalid regex pattern: {}", e)))?;
+        let regex = match Regex::new(pattern) {
+            Ok(r) => r,
+            Err(_) => return Ok(text.to_string()),
+        };
 
         self.redact_with_regex(text, &regex, type_prefix, "regex", config)
     }
