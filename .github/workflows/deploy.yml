@@ -2,10 +2,7 @@ name: Build and Deploy
 
 on:
   push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
-
+    tags: ['v*.*.*']
 permissions:
   contents: write
   pages: write
