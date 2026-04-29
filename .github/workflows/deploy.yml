@@ -1,9 +1,8 @@
-name: Deploy to GitHub Pages
+name: Build and Deploy
 
 on:
-  push:
-    branches: ["master"]
-    tags: ["v*"]
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -28,13 +27,10 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Install wasm-pack
-        run: |
-          curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - name: Build WASM Engine
-        run: |
-          cd engine
-          wasm-pack build --target web
+        run: cd engine && wasm-pack build --target web
 
       - name: Copy WASM artifacts to UI
         run: |
@@ -52,14 +48,10 @@ jobs:
           cache-dependency-path: ui/package-lock.json
 
       - name: Install UI Dependencies
-        run: |
-          cd ui
-          npm install
+        run: cd ui && npm ci
 
       - name: Build UI (Single File)
-        run: |
-          cd ui
-          npm run build
+        run: cd ui && npm run build
 
       - name: Extract version
         id: vars
@@ -67,30 +59,23 @@ jobs:
           VERSION=$(node -p "require('./ui/package.json').version")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Upload artifact
+      - name: Rename release artifact
+        run: cp ui/dist/index.html "ui/dist/ScrubChef-${{ steps.vars.outputs.version }}.html"
+
+      - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: './ui/dist'
 
-      - name: Create Release Artifact
-        run: |
-          mkdir -p release-dist
-          cp ui/dist/index.html release-dist/ScrubChef-${{ steps.vars.outputs.version }}.html
-
-      - name: Create GitHub Release
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.ref == 'refs/heads/master'
+      - name: Attach artifact to GitHub Release
+        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v1
         with:
-          files: release-dist/ScrubChef-${{ steps.vars.outputs.version }}.html
-          tag_name: v${{ steps.vars.outputs.version }}
-          name: ScrubChef v${{ steps.vars.outputs.version }}
-          body: "ScrubChef v${{ steps.vars.outputs.version }} Standalone Release."
-          generate_release_notes: true
+          files: "ui/dist/ScrubChef-${{ steps.vars.outputs.version }}.html"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   deploy:
-    if: github.ref == 'refs/heads/master' && startsWith(github.ref, 'refs/tags/v')
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

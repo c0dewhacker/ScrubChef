@@ -18,39 +18,23 @@ export const Token: React.FC<TokenProps> = ({
 }) => {
     const [showTooltip, setShowTooltip] = useState(false);
 
-    // Type-based colors (matching DESIGN.md)
+    // Use the clean `type` prop when available; fall back to the token ID for colour lookup.
     const getTypeColor = (t: string = '') => {
         const upper = t.toUpperCase();
-
-        // Identity (Blue)
         if (upper.includes('EMAIL') || upper.includes('PHONE') || upper.includes('USERNAME'))
             return 'border-[#38bdf8] text-[#38bdf8] bg-[#38bdf8]/10';
-
-        // Infrastructure (Green)
         if (upper.includes('IP') || upper.includes('MAC') || upper.includes('HOSTNAME') || upper.includes('URL'))
             return 'border-[#10b981] text-[#10b981] bg-[#10b981]/10';
-
-        // Secrets (Red)
-        if (upper.includes('JWT') || upper.includes('KEY') || upper.includes('TOKEN') || upper.includes('BASE64'))
+        if (upper.includes('JWT') || upper.includes('KEY') || upper.includes('TOKEN') || upper.includes('BASE64') || upper.includes('OAUTH'))
             return 'border-[#ef4444] text-[#ef4444] bg-[#ef4444]/10';
-
-        // PII/Financial (Orange)
         if (upper.includes('SSN') || upper.includes('CC') || upper.includes('CREDIT'))
             return 'border-[#f59e0b] text-[#f59e0b] bg-[#f59e0b]/10';
-
-        // UUID (Cyan)
         if (upper.includes('UUID'))
             return 'border-[#06b6d4] text-[#06b6d4] bg-[#06b6d4]/10';
-
-        // Regex/Custom (Purple)
-        if (upper.includes('REGEX'))
-            return 'border-[#8b5cf6] text-[#8b5cf6] bg-[#8b5cf6]/10';
-
-        // Default (Purple)
         return 'border-[#8b5cf6] text-[#8b5cf6] bg-[#8b5cf6]/10';
     };
 
-    const className = getTypeColor(id);
+    const className = getTypeColor(type || id);
 
     return (
         <span
@@ -73,20 +57,16 @@ export const Token: React.FC<TokenProps> = ({
                         <span className="font-bold text-[#38bdf8] uppercase tracking-wider">{type || 'UNKNOWN'}</span>
                         {count && <span className="px-1.5 bg-[#38bdf8]/10 text-[#38bdf8] rounded text-[9px]">{count}x</span>}
                     </div>
-
                     <div className="space-y-2">
-                        {/* Detection Method */}
                         {method && (
                             <div className="flex items-center gap-1.5 font-mono text-[9px] text-[#9ca3af]">
                                 <span className="uppercase opacity-50">Method:</span>
                                 <span className="text-[#10b981]">{method}</span>
                             </div>
                         )}
-
-                        {/* Context Area */}
-                        {(contextBefore || contextAfter) && (
+                        {(contextBefore !== undefined || contextAfter !== undefined) && (
                             <div className="bg-[#0f172a] p-1.5 rounded-lg border border-[#334155]/30">
-                                <div className="text-[9px] text-gray-500 uppercase font-bold mb-1 opacity-50">Surrounding Context</div>
+                                <div className="text-[9px] text-gray-500 uppercase font-bold mb-1 opacity-50">Context</div>
                                 <div className="font-mono text-[10px] whitespace-pre-wrap leading-relaxed">
                                     <span className="text-gray-500">{contextBefore || '...'}</span>
                                     <span className="bg-[#38bdf8]/20 text-[#38bdf8] px-0.5 rounded font-bold mx-1">{id}</span>
@@ -94,7 +74,6 @@ export const Token: React.FC<TokenProps> = ({
                                 </div>
                             </div>
                         )}
-
                         {original && (
                             <div className="text-[9px] text-[#9ca3af] italic opacity-60">
                                 Value: {original}

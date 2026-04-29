@@ -1,20 +1,17 @@
 import React from 'react';
 
-
 interface DiffViewProps {
     original: string;
     modified: string;
 }
 
 export const DiffView: React.FC<DiffViewProps> = ({ original, modified }) => {
-    // If no diff library is available, we can rely on a simpler visual check or assume the library is installed.
-    // For this environment, let's assume we can't easily add 'diff' package without user permission.
-    // So I'll implement a very simple character/word highlighter or just show side-by-side if they leverage a library.
-
-    // Actually, since we need to be dependency-minimal, let's just show them side-by-side for now 
-    // or implement a basic token match.
-    // BUT the best "diff" for redaction is often just highlighting the Redacted parts in the "After" view 
-    // and the Original parts in the "Before" view.
+    const renderModified = (text: string) =>
+        text.split(/(<[A-Z0-9_]+>)/g).map((part, i) =>
+            /^<[A-Z0-9_]+>$/.test(part)
+                ? <mark key={i} className="bg-red-500/20 text-red-400 border border-red-500/30 rounded px-0.5 mx-0.5 font-bold not-italic">{part}</mark>
+                : <span key={i}>{part}</span>
+        );
 
     return (
         <div className="flex flex-col h-full bg-[#0f172a] rounded-xl overflow-hidden border border-[#1f2937]">
@@ -27,7 +24,7 @@ export const DiffView: React.FC<DiffViewProps> = ({ original, modified }) => {
                     {original}
                 </div>
                 <div className="flex-1 p-4 font-mono text-xs overflow-auto whitespace-pre-wrap text-[#e5e7eb]">
-                    {modified}
+                    {renderModified(modified)}
                 </div>
             </div>
         </div>

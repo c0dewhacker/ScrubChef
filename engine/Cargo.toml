@@ -16,3 +16,5 @@ hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 getrandom = { version = "0.2", features = ["js"] }
+once_cell = "1.20"
+zeroize = "1.8"
