@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import logo from '../public/logo.svg'
+import logo from './logo.svg'
 declare const __APP_VERSION__: string;
 import {
   DndContext,
