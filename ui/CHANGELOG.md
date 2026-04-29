@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.9](https://github.com/c0dewhacker/ScrubChef/compare/v1.0.8...v1.0.9) (2026-04-29)
+
+
+### Bug Fixes
+
+* **ci:** switch to googleapis/release-please-action + add ui meta description ([a333305](https://github.com/c0dewhacker/ScrubChef/commit/a333305d287f8fae6133c41bcd0fbe9fd759fc83))
+* **ui:** add meta description tag to index.html ([60c4607](https://github.com/c0dewhacker/ScrubChef/commit/60c46076f749ea8c4903de62ef5072bee8e06d98))
+
 ## [1.0.8](https://github.com/c0dewhacker/ScrubChef/compare/v1.0.7...v1.0.8) (2026-04-29)
 
 
