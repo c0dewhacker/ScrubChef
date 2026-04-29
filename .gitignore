@@ -1,6 +1,6 @@
 # Rust
 target/
-Cargo.lock
+# Cargo.lock intentionally committed for reproducible WASM builds
 
 # Node
 node_modules/
@@ -21,3 +21,5 @@ Thumbs.db
 # ScrubChef
 ui/dist/
 engine/target/
+CLAUDE.md
+.serena/
