@@ -1,8 +1,9 @@
 name: Build and Deploy
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 permissions:
@@ -68,7 +69,6 @@ jobs:
           path: './ui/dist'
 
       - name: Attach artifact to GitHub Release
-        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v1
         with:
           files: "ui/dist/ScrubChef-${{ steps.vars.outputs.version }}.html"
