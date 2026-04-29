@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import logo from '../public/logo.svg'
 declare const __APP_VERSION__: string;
 import {
@@ -67,6 +67,9 @@ function App() {
   const [canonicalMap, setCanonicalMap] = useState<any>({ meta: {}, canonical: {} })
 
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
+  const selectedStepIdRef = useRef<string | null>(null);
+  const [operationSearch, setOperationSearch] = useState('');
+  const [recipeError, setRecipeError] = useState<string | null>(null);
   const [diffOriginal, setDiffOriginal] = useState('');
   const [diffModified, setDiffModified] = useState('');
   const [showTemplates, setShowTemplates] = useState(false);
@@ -81,6 +84,24 @@ function App() {
   // Drag state for robust resizing
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [startDims, setStartDims] = useState({ left: 0, right: 0, input: 0 });
+
+  // Keep a ref in sync so the worker's stale closure always reads the current value.
+  useEffect(() => { selectedStepIdRef.current = selectedStepId; }, [selectedStepId]);
+
+  // O(1) lookup by token id — avoids O(n) Object.values().find() per token render.
+  const canonicalMapById = useMemo(() => {
+    const map = new Map<string, any>();
+    Object.values(canonicalMap.canonical || {}).forEach((entry: any) => { map.set(entry.id, entry); });
+    return map;
+  }, [canonicalMap]);
+
+  const filteredOperations = useMemo(() =>
+    operationSearch
+      ? AVAILABLE_OPERATIONS.filter(op =>
+          op.name.toLowerCase().includes(operationSearch.toLowerCase()) ||
+          op.category.toLowerCase().includes(operationSearch.toLowerCase()))
+      : AVAILABLE_OPERATIONS,
+    [operationSearch]);
 
   const isEngineBusy = useRef(false);
   const nextUpdate = useRef<{ input: string, steps: Step[] } | null>(null);
@@ -150,14 +171,13 @@ function App() {
           const { input: queuedInput, steps: queuedSteps } = nextUpdate.current;
           nextUpdate.current = null;
 
-          // Re-run with queued data
           isEngineBusy.current = true;
           const config = prepareConfig(queuedSteps);
           worker.postMessage({
             type: 'run',
             input: queuedInput,
             config,
-            inspectStepId: selectedStepId // Pass current inspection target
+            inspectStepId: selectedStepIdRef.current, // Use ref to avoid stale closure
           });
         }
       } else if (type === 'error') {
@@ -273,10 +293,22 @@ function App() {
     setSteps(steps.map(s => s.id === id ? { ...s, label: newLabel } : s));
   };
 
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        setInput(ev.target?.result as string);
+        setFileName(file.name);
+      };
+      reader.readAsText(file);
+    }
+  }, []);
+
   const handleExport = () => {
     if (!output) return;
 
-    // Handle baseName more robustly
     let baseName = 'scrubchef_output';
     if (fileName) {
       const lastDot = fileName.lastIndexOf('.');
@@ -301,7 +333,7 @@ function App() {
       URL.revokeObjectURL(redactedUrl);
 
       // Download Mapping Sidecar
-      const sidecarHtml = generateMappingSidecar(input, output, canonicalMap, fileName || 'clipboard_input');
+      const sidecarHtml = generateMappingSidecar(canonicalMap, fileName || 'clipboard_input');
       const sidecarBlob = new Blob([sidecarHtml], { type: 'text/html;charset=utf-8' });
       const sidecarUrl = URL.createObjectURL(sidecarBlob);
       const sidecarLink = document.createElement('a');
@@ -360,10 +392,10 @@ function App() {
         if (validatedSteps) {
           setSteps(validatedSteps);
         } else {
-          alert('Invalid recipe structure');
+          setRecipeError('Invalid recipe structure');
         }
       } catch (err) {
-        alert('Error parsing recipe file');
+        setRecipeError('Error parsing recipe file');
       }
     };
     reader.readAsText(file);
@@ -385,7 +417,7 @@ function App() {
     // Regenerate IDs to avoid conflicts
     const newSteps = validated.map(s => ({
       ...s,
-      id: Date.now().toString() + Math.random().toString(36).substr(2, 9)
+      id: Date.now().toString() + Math.random().toString(36).slice(2, 11)
     }));
     setSteps(newSteps);
     setShowTemplates(false);
@@ -464,11 +496,13 @@ function App() {
               <input
                 type="text"
                 placeholder="Search operations..."
+                value={operationSearch}
+                onChange={(e) => setOperationSearch(e.target.value)}
                 className="w-full px-4 py-2.5 bg-[#0f172a] border border-[#1f2937] rounded-xl text-sm focus:outline-none focus:border-[#38bdf8] focus:ring-2 focus:ring-[#38bdf8]/20 transition-all placeholder:text-[#9ca3af]"
               />
             </div>
             <div className="flex-1 overflow-y-auto p-4 space-y-2">
-              {AVAILABLE_OPERATIONS.map((op) => (
+              {filteredOperations.map((op) => (
                 <button
                   key={op.type}
                   onClick={() => addStep(op.type)}
@@ -503,6 +537,8 @@ function App() {
             {/* Input */}
             <div
               style={{ height: inputHeight }}
+              onDrop={handleDrop}
+              onDragOver={(e) => e.preventDefault()}
               className="shrink-0 flex flex-col bg-gray-800/40 backdrop-blur-xl border border-gray-700/50 rounded-3xl overflow-hidden shadow-2xl relative"
             >
               <div className="h-16 bg-gray-900/50 border-b border-gray-700/50 flex items-center px-10 text-[11px] font-black text-gray-300 uppercase tracking-[0.2em]">
@@ -613,14 +649,12 @@ function App() {
                     ) : (
                       output.split(/(<[A-Z0-9_]+>)/g).map((part, i) => {
                         if (/^<[A-Z0-9_]+>$/.test(part)) {
-                          const id = part;
-                          const cleanId = id.replace(/[<>]/g, '');
-                          const entry = Object.values(canonicalMap.canonical || {}).find((e: any) => e.id === cleanId) as any;
-
+                          const cleanId = part.replace(/[<>]/g, '');
+                          const entry = canonicalMapById.get(cleanId) as any;
                           return (
                             <Token
                               key={i}
-                              id={id}
+                              id={part}
                               type={entry?.type}
                               count={entry?.occurrences}
                               original={entry?.original}
@@ -630,9 +664,9 @@ function App() {
                               isHighlighted={highlightedToken === part}
                               onHighlight={setHighlightedToken}
                             />
-                          )
+                          );
                         }
-                        return <span key={i} className="text-gray-300">{part}</span>
+                        return <span key={i} className="text-gray-300">{part}</span>;
                       })
                     )}
                   </div>
@@ -715,6 +749,14 @@ function App() {
                 </button>
               </div>
             </div>
+            {recipeError && (
+              <div className="mx-4 mb-2 px-3 py-2 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-xs flex items-center justify-between">
+                <span>{recipeError}</span>
+                <button onClick={() => setRecipeError(null)} className="ml-2 hover:text-red-300 transition-colors">
+                  <X size={12} />
+                </button>
+              </div>
+            )}
             <div className="flex-1 overflow-y-auto p-4">
               <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
                 <SortableContext items={steps.map(s => s.id)} strategy={verticalListSortingStrategy}>
