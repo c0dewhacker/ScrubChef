@@ -6,7 +6,8 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  // src/engine holds wasm-pack output, regenerated on every build — never hand-edited.
+  globalIgnores(['dist', 'src/engine']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [
@@ -16,7 +17,7 @@ export default defineConfig([
       reactRefresh.configs.vite,
     ],
     languageOptions: {
-      ecmaVersion: 2020,
+      ecmaVersion: 2022,
       globals: globals.browser,
     },
   },
