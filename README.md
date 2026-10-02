@@ -8,7 +8,7 @@ ScrubChef is a specialized tool designed for security engineers and developers t
 Redaction is a high-stakes task. ScrubChef is built on three core pillars:
 1. **Zero Data Leakage**: By using a Rust-to-WASM engine, all sensitive processing happens on your machine.
 2. **Auditability**: Every redaction is deterministic and can be inspected stage-by-stage.
-3. **Reversibility**: Generates a secure sidecar mapping for reverse lookups when troubleshooting requirements change.
+3. **Reversibility**: Generates a secure sidecar mapping for reverse lookups when troubleshooting requirements change. The sidecar holds the original values in clear text — keep it separate from the redacted output.
 
 ## 🚀 Key Features
 - **WASM Under the Hood**: High-performance detection logic written in Rust.
@@ -23,7 +23,7 @@ Redaction is a high-stakes task. ScrubChef is built on three core pillars:
 ## 🛠️ Development & Building
 
 ### Prerequisites
-- [Rust](https://rustup.rs/) (with `wasm-pack`)
+- [Rust](https://rustup.rs/) 1.85+ (with `wasm-pack`)
 - [Node.js](https://nodejs.org/) (current LTS)
 
 ### Full Build (Single HTML File)
@@ -41,6 +41,17 @@ Redaction is a high-stakes task. ScrubChef is built on three core pillars:
    ```
    *Result: A single `index.html` file in `ui/dist` containing the entire application.*
 
+### Tests & Checks
+```bash
+cd engine && cargo test                                   # engine unit tests
+cd engine && cargo clippy --all-targets -- -D warnings     # catches non-compiling detectors
+cd ui && npm run lint
+cd ui && npm run build                                    # also typechecks
+```
+
 ## ⚖️ Disclaimer
 While ScrubChef is powerful, automated redaction is not a replacement for human review. Always verify the output before sharing sensitive materials.
+
+## 📄 License
+[MIT](LICENSE) © c0dewhacker
 
