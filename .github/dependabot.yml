@@ -1,0 +1,63 @@
+# Dependabot was only ever running GitHub's automatic *security* updates for npm.
+# This adds scheduled version updates for all three ecosystems in the repo.
+version: 2
+
+updates:
+  # --- UI (React/Vite) ---
+  - package-ecosystem: npm
+    directory: /ui
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    open-pull-requests-limit: 5
+    labels: [dependencies, javascript]
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+      include: scope
+    groups:
+      # One PR for the React runtime, which must move together.
+      react:
+        patterns: ["react", "react-dom", "@types/react", "@types/react-dom"]
+      # One PR for lint/build tooling; these churn constantly and never ship to users.
+      dev-tooling:
+        dependency-type: development
+        patterns: ["*"]
+        exclude-patterns: ["typescript"]
+    ignore:
+      # typescript-eslint hard-refuses TS 7 ("typescript-eslint does not support TS 7.0"),
+      # which takes `npm run lint` down entirely. Revisit once it ships TS 7 support.
+      - dependency-name: typescript
+        versions: ["7.x"]
+      # `vite` is an alias for rolldown-vite and is pinned in both deps and overrides;
+      # Dependabot cannot bump the two consistently. Updated by hand.
+      - dependency-name: vite
+
+  # --- Redaction engine (Rust → WASM) ---
+  - package-ecosystem: cargo
+    directory: /engine
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    open-pull-requests-limit: 5
+    labels: [dependencies, rust]
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+    groups:
+      rustcrypto:
+        patterns: ["hmac", "sha2", "digest", "hex", "zeroize"]
+
+  # --- CI workflows ---
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    labels: [dependencies, ci]
+    commit-message:
+      prefix: "ci(deps)"
+      include: scope
