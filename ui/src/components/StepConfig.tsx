@@ -1,4 +1,13 @@
+import type React from 'react';
 import { Settings, Info } from 'lucide-react';
+import type { RedactionMode, StepSettings } from '../types/pipeline';
+
+// Labels and the config field each structural step writes to.
+const NAMED_TARGET_FIELDS: Record<string, { label: string; field: 'keys' | 'names'; noun: string; placeholder: string }> = {
+    jsonKey: { label: 'JSON Keys (CSV)', field: 'keys', noun: 'JSON keys', placeholder: 'e.g. password, api_key' },
+    queryParam: { label: 'URL Parameters (CSV)', field: 'names', noun: 'URL parameters', placeholder: 'e.g. password, api_key' },
+    header: { label: 'HTTP Headers (CSV)', field: 'names', noun: 'headers', placeholder: 'e.g. Authorization, Cookie' },
+};
 
 const HelpIcon: React.FC<{ text: string }> = ({ text }) => (
     <div className="group/help relative inline-block ml-1.5 align-middle">
@@ -13,16 +22,32 @@ const HelpIcon: React.FC<{ text: string }> = ({ text }) => (
 interface StepConfigProps {
     type: string;
     label?: string;
-    config: any;
+    config: StepSettings;
     onLabelChange?: (newLabel: string) => void;
-    onChange: (config: any) => void;
+    onChange: (config: StepSettings) => void;
     isOpen: boolean;
     onToggle: () => void;
 }
 
+// An imported recipe may hold these fields as arrays rather than the CSV string the form edits.
+const asCsv = (value: string | string[] | undefined): string =>
+    Array.isArray(value) ? value.join(', ') : (value ?? '');
+
+const REDACTION_MODES: RedactionMode[] = ['placeholder', 'mask', 'preserveLastN'];
+
+const asRedactionMode = (value: string): RedactionMode =>
+    (REDACTION_MODES as string[]).includes(value) ? (value as RedactionMode) : 'placeholder';
+
 export const StepConfig: React.FC<StepConfigProps> = ({ type, config, label, onLabelChange, onChange, isOpen, onToggle }) => {
-    const handleChange = (key: string, value: any) => {
+    const handleChange = <K extends keyof StepSettings>(key: K, value: StepSettings[K]) => {
         onChange({ ...config, [key]: value });
+    };
+
+    // Number inputs yield NaN when cleared, which serialises to null and silently resets the
+    // field. Fall back to the supplied default instead.
+    const handleNumberChange = (key: 'preserveCount' | 'start' | 'end' | 'maskLength', raw: string, fallback: number) => {
+        const parsed = Number.parseInt(raw, 10);
+        handleChange(key, Number.isNaN(parsed) ? fallback : parsed);
     };
 
     // Common mode selector for most types
@@ -34,7 +59,7 @@ export const StepConfig: React.FC<StepConfigProps> = ({ type, config, label, onL
             </label>
             <select
                 value={config.mode || 'placeholder'}
-                onChange={(e) => handleChange('mode', e.target.value)}
+                onChange={(e) => handleChange('mode', asRedactionMode(e.target.value))}
                 className="w-full px-3 py-1.5 bg-[#0f172a] border border-[#1f2937] rounded text-sm text-[#e5e7eb] focus:outline-none focus:border-[#38bdf8]"
             >
                 <option value="placeholder">Placeholder (TOKEN_1)</option>
@@ -58,6 +83,20 @@ export const StepConfig: React.FC<StepConfigProps> = ({ type, config, label, onL
                             className="w-full px-3 py-1.5 bg-[#0f172a] border border-[#1f2937] rounded text-sm text-[#e5e7eb] focus:outline-none focus:border-[#38bdf8]"
                         />
                     </div>
+                    <div>
+                        <label className="block text-xs font-semibold text-[#9ca3af] mb-1">
+                            Fixed Mask Width
+                            <HelpIcon text="Always emit this many mask characters, so the output does not reveal how long the original value was. Leave at 0 to match the value's length." />
+                        </label>
+                        <input
+                            type="number"
+                            min="0"
+                            max="64"
+                            value={config.maskLength ?? 0}
+                            onChange={(e) => handleNumberChange('maskLength', e.target.value, 0)}
+                            className="w-full px-3 py-1.5 bg-[#0f172a] border border-[#1f2937] rounded text-sm text-[#e5e7eb] focus:outline-none focus:border-[#38bdf8]"
+                        />
+                    </div>
                     {config.mode === 'preserveLastN' && (
                         <div>
                             <label className="block text-xs font-semibold text-[#9ca3af] mb-1">Preserve Count</label>
@@ -65,8 +104,8 @@ export const StepConfig: React.FC<StepConfigProps> = ({ type, config, label, onL
                                 type="number"
                                 min="1"
                                 max="10"
-                                value={config.preserveCount || 4}
-                                onChange={(e) => handleChange('preserveCount', parseInt(e.target.value))}
+                                value={config.preserveCount ?? 4}
+                                onChange={(e) => handleNumberChange('preserveCount', e.target.value, 4)}
                                 className="w-full px-3 py-1.5 bg-[#0f172a] border border-[#1f2937] rounded text-sm text-[#e5e7eb] focus:outline-none focus:border-[#38bdf8]"
                             />
                         </div>
@@ -89,7 +128,7 @@ export const StepConfig: React.FC<StepConfigProps> = ({ type, config, label, onL
                             </label>
                             <input
                                 type="text"
-                                value={config.allowedDomains || ''}
+                                value={asCsv(config.allowedDomains)}
                                 onChange={(e) => handleChange('allowedDomains', e.target.value)}
                                 placeholder="e.g. company.com, subsidiary.org"
                                 className="w-full px-3 py-1.5 bg-[#0f172a] border border-[#1f2937] rounded text-sm text-[#e5e7eb] focus:outline-none focus:border-[#38bdf8]"
@@ -110,7 +149,7 @@ export const StepConfig: React.FC<StepConfigProps> = ({ type, config, label, onL
                             </label>
                             <input
                                 type="text"
-                                value={config.excludeSubnets || ''}
+                                value={asCsv(config.excludeSubnets)}
                                 onChange={(e) => handleChange('excludeSubnets', e.target.value)}
                                 placeholder="e.g. 192.168.0.0/16, 10.0.0.0/8"
                                 className="w-full px-3 py-1.5 bg-[#0f172a] border border-[#1f2937] rounded text-sm text-[#e5e7eb] focus:outline-none focus:border-[#38bdf8]"
@@ -144,25 +183,20 @@ export const StepConfig: React.FC<StepConfigProps> = ({ type, config, label, onL
 
             case 'jsonKey':
             case 'queryParam':
-            case 'header':
-                const labelMap: Record<string, string> = {
-                    'jsonKey': 'JSON Keys (CSV)',
-                    'queryParam': 'URL Parameters (CSV)',
-                    'header': 'HTTP Headers (CSV)'
-                };
-                const configKey = type === 'jsonKey' ? 'keys' : 'names';
+            case 'header': {
+                const target = NAMED_TARGET_FIELDS[type];
                 return (
                     <div className="space-y-3">
                         <div>
                             <label className="block text-xs font-semibold text-[#9ca3af] mb-1">
-                                {labelMap[type]}
-                                <HelpIcon text={`Specifically target these ${type === 'jsonKey' ? 'JSON keys' : (type === 'header' ? 'headers' : 'URL parameters')} for redaction.`} />
+                                {target.label}
+                                <HelpIcon text={`Specifically target these ${target.noun} for redaction.`} />
                             </label>
                             <input
                                 type="text"
-                                value={config[configKey] || ''}
-                                onChange={(e) => handleChange(configKey, e.target.value)}
-                                placeholder={type === 'header' ? 'e.g. Authorization, Cookie' : 'e.g. password, api_key'}
+                                value={asCsv(config[target.field])}
+                                onChange={(e) => handleChange(target.field, e.target.value)}
+                                placeholder={target.placeholder}
                                 className="w-full px-3 py-1.5 bg-[#0f172a] border border-[#1f2937] rounded text-sm text-[#e5e7eb] focus:outline-none focus:border-[#38bdf8]"
                             />
                         </div>
@@ -170,6 +204,7 @@ export const StepConfig: React.FC<StepConfigProps> = ({ type, config, label, onL
                         {renderMaskOptions()}
                     </div>
                 );
+            }
 
             case 'replace':
                 return (
@@ -231,6 +266,20 @@ export const StepConfig: React.FC<StepConfigProps> = ({ type, config, label, onL
                                     className="w-full px-3 py-1.5 bg-[#0f172a] border border-[#1f2937] rounded text-sm text-[#e5e7eb] focus:outline-none focus:border-[#38bdf8]"
                                 />
                             </div>
+                        </div>
+                        <div>
+                            <label className="block text-xs font-semibold text-[#9ca3af] mb-1">
+                                Apply Offsets To
+                                <HelpIcon text="Per Line applies the range to every line — use this for fixed-width columns such as leading timestamps. Whole Document masks a single span counted from the very start of the input." />
+                            </label>
+                            <select
+                                value={config.scope ?? 'document'}
+                                onChange={(e) => handleChange('scope', e.target.value === 'line' ? 'line' : 'document')}
+                                className="w-full px-3 py-1.5 bg-[#0f172a] border border-[#1f2937] rounded text-sm text-[#e5e7eb] focus:outline-none focus:border-[#38bdf8]"
+                            >
+                                <option value="line">Per Line (every line)</option>
+                                <option value="document">Whole Document (one span)</option>
+                            </select>
                         </div>
                         <div>
                             <label className="block text-xs font-semibold text-[#9ca3af] mb-1">Mask Character</label>

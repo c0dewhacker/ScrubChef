@@ -23,39 +23,18 @@ import { Token } from './components/Token';
 import { DiffView } from './components/DiffView';
 import { Download, Upload, LayoutTemplate, Trash2, Shield, HelpCircle, X } from 'lucide-react';
 import { EXAMPLE_RECIPES } from './data/exampleRecipes';
+import { AVAILABLE_OPERATIONS, defaultConfigFor, engineTypeFor } from './data/operations';
 import EngineWorker from './utils/engineWorker?worker&inline';
+import { EMPTY_CANONICAL_MAP } from './types/pipeline';
+import type {
+  CanonicalEntry, CanonicalMap, ExemptSpan, PipelineConfig, Step, StepSettings, WorkerResponse,
+} from './types/pipeline';
+import { newStepId } from './utils/stepId';
+import { normaliseCsvFields } from './utils/normaliseConfig';
+import { splitTokens } from './utils/tokenText';
 
-export interface Step {
-  id: string;
-  type: string;
-  label?: string; // User-defined friendly name
-  enabled: boolean;
-  config: any;
-}
+export type { Step } from './types/pipeline';
 
-const AVAILABLE_OPERATIONS = [
-  { type: 'email', name: 'Email Address', category: 'Identity', icon: '📧' },
-  { type: 'phone', name: 'Phone Number', category: 'Identity', icon: '📱' },
-  { type: 'username', name: 'Username', category: 'Identity', icon: '👤' },
-  { type: 'ipv4', name: 'IPv4 Address', category: 'Infrastructure', icon: '🌐' },
-  { type: 'ipv6', name: 'IPv6 Address', category: 'Infrastructure', icon: '🌍' },
-  { type: 'mac', name: 'MAC Address', category: 'Infrastructure', icon: '🔌' },
-  { type: 'hostname', name: 'Hostname/FQDN', category: 'Infrastructure', icon: '🖥️' },
-  { type: 'url', name: 'URL', category: 'Infrastructure', icon: '🔗' },
-  { type: 'jwt', name: 'JWT Token', category: 'Secrets', icon: '🔑' },
-  { type: 'apikey', name: 'API Key', category: 'Secrets', icon: '🗝️' },
-  { type: 'oauth', name: 'OAuth Token', category: 'Secrets', icon: '🛡️' },
-  { type: 'base64', name: 'Base64 Blob', category: 'Secrets', icon: '🔐' },
-  { type: 'uuid', name: 'UUID', category: 'Identifiers', icon: '🆔' },
-  { type: 'ssn', name: 'SSN', category: 'PII', icon: '🔒' },
-  { type: 'credit_card', name: 'Credit Card', category: 'Financial', icon: '💳' },
-  { type: 'regex', name: 'Custom Regex', category: 'Advanced', icon: '⚡' },
-  { type: 'jsonKey', name: 'JSON Key', category: 'Structure', icon: '{}' },
-  { type: 'queryParam', name: 'URL Parameter', category: 'Structure', icon: '?' },
-  { type: 'header', name: 'HTTP Header', category: 'Structure', icon: '↕️' },
-  { type: 'replace', name: 'Find & Replace', category: 'Advanced', icon: '🔍' },
-  { type: 'partialMask', name: 'Partial Mask', category: 'Advanced', icon: '🌑' },
-];
 
 function App() {
   const [input, setInput] = useState('')
@@ -64,7 +43,8 @@ function App() {
   const [highlightedToken, setHighlightedToken] = useState<string | null>(null)
   const [engineLoaded, setEngineLoaded] = useState(false)
   const [steps, setSteps] = useState<Step[]>([])
-  const [canonicalMap, setCanonicalMap] = useState<any>({ meta: {}, canonical: {} })
+  const [canonicalMap, setCanonicalMap] = useState<CanonicalMap>(EMPTY_CANONICAL_MAP)
+  const [exemptSpans, setExemptSpans] = useState<ExemptSpan[]>([])
 
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const selectedStepIdRef = useRef<string | null>(null);
@@ -90,10 +70,24 @@ function App() {
 
   // O(1) lookup by token id — avoids O(n) Object.values().find() per token render.
   const canonicalMapById = useMemo(() => {
-    const map = new Map<string, any>();
-    Object.values(canonicalMap.canonical || {}).forEach((entry: any) => { map.set(entry.id, entry); });
+    const map = new Map<string, CanonicalEntry>();
+    Object.values(canonicalMap.canonical ?? {}).forEach((entry) => { map.set(entry.id, entry); });
     return map;
   }, [canonicalMap]);
+
+  // Occurrences summed per engine type, so the pipeline list is O(entries) instead of
+  // re-scanning the whole canonical map once per rendered step.
+  const matchCountsByType = useMemo(() => {
+    const counts = new Map<string, number>();
+    Object.values(canonicalMap.canonical ?? {}).forEach((entry) => {
+      counts.set(entry.type, (counts.get(entry.type) ?? 0) + (entry.occurrences || 0));
+    });
+    return counts;
+  }, [canonicalMap]);
+
+  const totalRedactions = useMemo(
+    () => Object.values(canonicalMap.canonical ?? {}).reduce((acc, e) => acc + e.occurrences, 0),
+    [canonicalMap]);
 
   const filteredOperations = useMemo(() =>
     operationSearch
@@ -114,85 +108,59 @@ function App() {
   );
   const workerRef = useRef<Worker | null>(null);
 
-  const prepareConfig = (currentSteps: Step[]) => {
-    const transformedSteps = currentSteps.filter(s => s.enabled).map(step => {
-      const newConfig = { ...step.config };
-
-      // Transform CSV strings to Arrays, and ensure they exist for structural types
-      if (step.type === 'email') {
-        newConfig.allowedDomains = typeof newConfig.allowedDomains === 'string'
-          ? newConfig.allowedDomains.split(',').map((d: string) => d.trim()).filter(Boolean)
-          : (newConfig.allowedDomains || []);
-      }
-      if (step.type === 'ipv4') {
-        newConfig.excludeSubnets = typeof newConfig.excludeSubnets === 'string'
-          ? newConfig.excludeSubnets.split(',').map((s: string) => s.trim()).filter(Boolean)
-          : (newConfig.excludeSubnets || []);
-      }
-      if (step.type === 'jsonKey') {
-        newConfig.keys = typeof newConfig.keys === 'string'
-          ? newConfig.keys.split(',').map((k: string) => k.trim()).filter(Boolean)
-          : (newConfig.keys || []);
-      }
-      if (step.type === 'queryParam' || step.type === 'header') {
-        newConfig.names = typeof newConfig.names === 'string'
-          ? newConfig.names.split(',').map((n: string) => n.trim()).filter(Boolean)
-          : (newConfig.names || []);
-      }
-
-      return { ...step, config: newConfig };
-    });
-
-    return {
-      version: 1,
-      steps: transformedSteps
-    };
-  };
+  const prepareConfig = (currentSteps: Step[]): PipelineConfig => ({
+    version: 1,
+    steps: currentSteps.filter(s => s.enabled).map(step => ({
+      ...step,
+      config: normaliseCsvFields(step.type, step.config),
+    })),
+  });
 
   useEffect(() => {
     // 2. Instantiate it directly
     const worker = new EngineWorker();
     workerRef.current = worker;
 
-    worker.onmessage = (e) => {
-      const { type, output, map, error, diffOriginal, diffModified } = e.data;
+    // Sends whatever update was coalesced while the engine was busy. Runs after both
+    // success and failure: skipping it on error used to strand the queued edit, leaving the
+    // output permanently stale until the next keystroke.
+    const drainQueue = () => {
+      isEngineBusy.current = false;
+      const queued = nextUpdate.current;
+      if (!queued) return;
+      nextUpdate.current = null;
+      isEngineBusy.current = true;
+      worker.postMessage({
+        type: 'run',
+        input: queued.input,
+        config: prepareConfig(queued.steps),
+        inspectStepId: selectedStepIdRef.current, // ref, so this closure is never stale
+      });
+    };
 
-      if (type === 'ready') {
+    worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
+      const msg = e.data;
+
+      if (msg.type === 'ready') {
         setEngineLoaded(true);
-      } else if (type === 'result') {
-        setOutput(output);
-        setCanonicalMap(map);
-        setDiffOriginal(diffOriginal || '');
-        setDiffModified(diffModified || '');
-        isEngineBusy.current = false;
-
-        // Process queued update if any
-        if (nextUpdate.current) {
-          const { input: queuedInput, steps: queuedSteps } = nextUpdate.current;
-          nextUpdate.current = null;
-
-          isEngineBusy.current = true;
-          const config = prepareConfig(queuedSteps);
-          worker.postMessage({
-            type: 'run',
-            input: queuedInput,
-            config,
-            inspectStepId: selectedStepIdRef.current, // Use ref to avoid stale closure
-          });
-        }
-      } else if (type === 'error') {
-        console.error('Engine error:', error);
-        console.error('Full error data:', e.data);
-        isEngineBusy.current = false;
-        // Show error to user
-        setOutput(`❌ Error: ${error || 'Unknown error occurred'}`);
+      } else if (msg.type === 'result') {
+        setOutput(msg.output);
+        setCanonicalMap(msg.map);
+        setExemptSpans(msg.exemptSpans ?? []);
+        setDiffOriginal(msg.diffOriginal || '');
+        setDiffModified(msg.diffModified || '');
+        drainQueue();
+      } else if (msg.type === 'error') {
+        console.error('Engine error:', msg.error);
+        setOutput(`❌ Error: ${msg.error || 'Unknown error occurred'}`);
+        drainQueue();
       }
     };
 
     worker.onerror = (errorEvent) => {
       console.error('Worker error event:', errorEvent);
-      console.error('Worker error message:', errorEvent.message);
       isEngineBusy.current = false;
+      nextUpdate.current = null;
       setOutput(`❌ Worker Error: ${errorEvent.message || 'Unknown worker error'}`);
     };
 
@@ -281,16 +249,17 @@ function App() {
   };
 
   const addStep = (type: string) => {
-    const newStep = { id: Date.now().toString(), type, enabled: true, config: {} }
-    setSteps([...steps, newStep])
+    // Date.now() alone collided when two steps were added in the same millisecond, which
+    // produced duplicate React keys and broke drag-and-drop reordering.
+    setSteps(prev => [...prev, { id: newStepId(), type, enabled: true, config: defaultConfigFor(type) }]);
   }
 
-  const handleStepConfigChange = (id: string, newConfig: any) => {
-    setSteps(steps.map(s => s.id === id ? { ...s, config: newConfig } : s));
+  const handleStepConfigChange = (id: string, newConfig: StepSettings) => {
+    setSteps(prev => prev.map(s => s.id === id ? { ...s, config: newConfig } : s));
   };
 
   const handleLabelChange = (id: string, newLabel: string) => {
-    setSteps(steps.map(s => s.id === id ? { ...s, label: newLabel } : s));
+    setSteps(prev => prev.map(s => s.id === id ? { ...s, label: newLabel } : s));
   };
 
   const handleDrop = useCallback((e: React.DragEvent) => {
@@ -364,19 +333,22 @@ function App() {
     URL.revokeObjectURL(url);
   };
 
-  const validatePipeline = (data: any): Step[] | null => {
+  const validatePipeline = (data: unknown): Step[] | null => {
     if (!data || typeof data !== 'object') return null;
-    const stepsToValidate = Array.isArray(data) ? data : data.steps;
-    if (!Array.isArray(stepsToValidate)) return null;
+    const raw = Array.isArray(data) ? data : (data as { steps?: unknown }).steps;
+    if (!Array.isArray(raw)) return null;
 
-    // Validate each step has required fields
-    return stepsToValidate.filter(step => {
-      return step && typeof step === 'object' && step.id && step.type;
-    }).map(step => ({
-      ...step,
-      enabled: step.enabled !== undefined ? step.enabled : true,
-      config: step.config || {}
-    }));
+    return raw
+      .filter((step): step is Partial<Step> & { type: string } =>
+        !!step && typeof step === 'object' && typeof step.type === 'string')
+      .map(step => ({
+        type: step.type,
+        label: step.label,
+        // Always regenerate: ids from a saved recipe can collide with ids already in use.
+        id: newStepId(),
+        enabled: step.enabled ?? true,
+        config: step.config ?? {},
+      }));
   };
 
   const handleLoadRecipe = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -389,12 +361,13 @@ function App() {
       try {
         const parsed = parsePipeline(content);
         const validatedSteps = validatePipeline(parsed);
-        if (validatedSteps) {
+        if (validatedSteps?.length) {
           setSteps(validatedSteps);
+          setRecipeError(null);
         } else {
-          setRecipeError('Invalid recipe structure');
+          setRecipeError('Invalid recipe structure — no usable steps found');
         }
-      } catch (err) {
+      } catch {
         setRecipeError('Error parsing recipe file');
       }
     };
@@ -407,23 +380,16 @@ function App() {
     setInput('');
     setFileName(null);
     setOutput('');
-    setCanonicalMap({ meta: {}, canonical: {} });
+    setCanonicalMap(EMPTY_CANONICAL_MAP);
+    setExemptSpans([]);
   };
 
-  const handleLoadExample = (steps: Step[]) => {
-    const validated = validatePipeline(steps);
+  const handleLoadExample = (recipeSteps: Step[]) => {
+    const validated = validatePipeline(recipeSteps);
     if (!validated) return;
-
-    // Regenerate IDs to avoid conflicts
-    const newSteps = validated.map(s => ({
-      ...s,
-      id: Date.now().toString() + Math.random().toString(36).slice(2, 11)
-    }));
-    setSteps(newSteps);
+    setSteps(validated);
     setShowTemplates(false);
   };
-
-  const totalRedactions = Object.values(canonicalMap.canonical || {}).reduce((acc: number, curr: any) => acc + curr.occurrences, 0) as number;
 
   return (
     <div className="h-screen w-full flex flex-col bg-[#0f172a] text-[#e5e7eb] overflow-hidden">
@@ -474,6 +440,15 @@ function App() {
             <span className="text-gray-400">Redactions:</span>
             <span className="font-mono font-bold text-purple-400">{totalRedactions}</span>
           </div>
+          {exemptSpans.length > 0 && (
+            <div
+              className="flex items-center gap-2 px-4 py-2 bg-[#10b981]/10 rounded-xl border border-[#10b981]/20"
+              title="Values an allowlist or subnet exclusion kept on purpose. They are protected from every later step."
+            >
+              <span className="text-[#10b981]/70">Kept:</span>
+              <span className="font-mono font-bold text-[#10b981]">{exemptSpans.length}</span>
+            </div>
+          )}
         </div>
         <button
           onClick={handleExport}
@@ -636,7 +611,7 @@ function App() {
               </div>
               <div className="flex-1 bg-transparent p-0 overflow-hidden flex flex-col">
                 {selectedStepId ? (
-                  <DiffView original={diffOriginal} modified={diffModified} />
+                  <DiffView original={diffOriginal} modified={diffModified} knownTokenIds={canonicalMapById} />
                 ) : (
                   <div className="flex-1 px-6 pb-6 pt-12 font-mono text-sm overflow-auto text-[#e5e7eb] relative z-0">
                     {!input ? (
@@ -647,26 +622,36 @@ function App() {
                         </div>
                       </div>
                     ) : (
-                      output.split(/(<[A-Z0-9_]+>)/g).map((part, i) => {
-                        if (/^<[A-Z0-9_]+>$/.test(part)) {
-                          const cleanId = part.replace(/[<>]/g, '');
-                          const entry = canonicalMapById.get(cleanId) as any;
+                      splitTokens(output, (id) => canonicalMapById.has(id), exemptSpans).map((segment, i) => {
+                        if (segment.kind === 'exempt') {
+                          return (
+                            <span
+                              key={i}
+                              className="text-[#10b981] bg-[#10b981]/10 border-b border-dashed border-[#10b981]/50 rounded-sm px-0.5 cursor-help"
+                              title={`Kept deliberately by the ${segment.rule} step's allow rule`}
+                            >
+                              {segment.value}
+                            </span>
+                          );
+                        }
+                        if (segment.kind === 'token') {
+                          const entry = canonicalMapById.get(segment.tokenId);
                           return (
                             <Token
                               key={i}
-                              id={part}
+                              id={segment.id}
                               type={entry?.type}
                               count={entry?.occurrences}
                               original={entry?.original}
                               contextBefore={entry?.context_before}
                               contextAfter={entry?.context_after}
                               method={entry?.method}
-                              isHighlighted={highlightedToken === part}
+                              isHighlighted={highlightedToken === segment.id}
                               onHighlight={setHighlightedToken}
                             />
                           );
                         }
-                        return <span key={i} className="text-gray-300">{part}</span>;
+                        return <span key={i} className="text-gray-300">{segment.value}</span>;
                       })
                     )}
                   </div>
@@ -762,10 +747,9 @@ function App() {
                 <SortableContext items={steps.map(s => s.id)} strategy={verticalListSortingStrategy}>
                   <div className="space-y-3">
                     {steps.map((step) => {
-                      // Calculate match count for this step type
-                      const matchCount = Object.values(canonicalMap.canonical || {}).filter(
-                        (entry: any) => entry.type === step.type
-                      ).reduce((acc: number, entry: any) => acc + (entry.occurrences || 0), 0);
+                      // engineTypeFor bridges the UI's camelCase step types and the
+                      // snake_case types the engine records (e.g. jsonKey → json_key).
+                      const matchCount = matchCountsByType.get(engineTypeFor(step.type)) ?? 0;
 
                       return (
                         <PipelineStep
@@ -776,9 +760,9 @@ function App() {
                           matchCount={matchCount}
                           onConfigChange={handleStepConfigChange}
                           onLabelChange={handleLabelChange}
-                          onToggle={(id) => setSteps(steps.map(s => s.id === id ? { ...s, enabled: !s.enabled } : s))}
+                          onToggle={(id) => setSteps(prev => prev.map(s => s.id === id ? { ...s, enabled: !s.enabled } : s))}
                           onRemove={(id) => {
-                            setSteps(steps.filter(s => s.id !== id));
+                            setSteps(prev => prev.filter(s => s.id !== id));
                             if (selectedStepId === id) setSelectedStepId(null);
                           }}
                         />

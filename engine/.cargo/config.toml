@@ -1,0 +1,5 @@
+# getrandom 0.3+ refuses to build for wasm32-unknown-unknown unless its web backend is
+# selected explicitly. The `wasm_js` Cargo feature alone is not enough — the backend is
+# chosen by this cfg flag. Keeping it here means `wasm-pack build` works with no extra env.
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

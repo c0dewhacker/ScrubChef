@@ -1,16 +1,19 @@
 import React from 'react';
+import { splitTokens } from '../utils/tokenText';
 
 interface DiffViewProps {
     original: string;
     modified: string;
+    /** Canonical entries keyed by token id; only these are highlighted as redactions. */
+    knownTokenIds: ReadonlyMap<string, unknown>;
 }
 
-export const DiffView: React.FC<DiffViewProps> = ({ original, modified }) => {
+export const DiffView: React.FC<DiffViewProps> = ({ original, modified, knownTokenIds }) => {
     const renderModified = (text: string) =>
-        text.split(/(<[A-Z0-9_]+>)/g).map((part, i) =>
-            /^<[A-Z0-9_]+>$/.test(part)
-                ? <mark key={i} className="bg-red-500/20 text-red-400 border border-red-500/30 rounded px-0.5 mx-0.5 font-bold not-italic">{part}</mark>
-                : <span key={i}>{part}</span>
+        splitTokens(text, (id) => knownTokenIds.has(id)).map((segment, i) =>
+            segment.kind === 'token'
+                ? <mark key={i} className="bg-red-500/20 text-red-400 border border-red-500/30 rounded px-0.5 mx-0.5 font-bold not-italic">{segment.id}</mark>
+                : <span key={i}>{segment.value}</span>
         );
 
     return (

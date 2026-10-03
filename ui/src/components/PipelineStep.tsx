@@ -1,17 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { GripVertical, X, Eye } from 'lucide-react';
 import { StepConfig } from './StepConfig';
-import { useState } from 'react';
-
-interface Step {
-    id: string;
-    type: string;
-    label?: string;
-    enabled: boolean;
-    config: any;
-}
+import type { Step, StepSettings } from '../types/pipeline';
 
 interface Props {
     step: Step;
@@ -20,7 +12,7 @@ interface Props {
     isSelected: boolean;
     onSelect: (id: string) => void;
     matchCount?: number;
-    onConfigChange?: (id: string, config: any) => void;
+    onConfigChange?: (id: string, config: StepSettings) => void;
     onLabelChange?: (id: string, label: string) => void;
 }
 
@@ -52,6 +44,7 @@ export const PipelineStep: React.FC<Props> = ({ step, onToggle, onRemove, matchC
                     {...attributes}
                     {...listeners}
                     className="cursor-grab active:cursor-grabbing text-[#9ca3af] hover:text-[#e5e7eb] transition-colors"
+                    aria-label={`Reorder ${step.label || step.type} step`}
                 >
                     <GripVertical size={18} />
                 </button>
@@ -92,13 +85,17 @@ export const PipelineStep: React.FC<Props> = ({ step, onToggle, onRemove, matchC
                     onClick={() => onSelect(step.id)}
                     className={`transition-colors mr-2 ${isSelected ? 'text-[#38bdf8]' : 'text-[#9ca3af] hover:text-[#38bdf8]'}`}
                     title="Inspect Step Changes"
+                    aria-label={`Inspect ${step.label || step.type} step`}
+                    aria-pressed={isSelected}
                 >
                     <Eye size={18} />
                 </button>
 
                 <button
                     onClick={() => onRemove(step.id)}
-                    className="text-[#9ca3af] hover:text-[#ef4444] transition-colors opacity-0 group-hover:opacity-100"
+                    className="text-[#9ca3af] hover:text-[#ef4444] transition-colors opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                    title="Remove step"
+                    aria-label={`Remove ${step.label || step.type} step`}
                 >
                     <X size={18} />
                 </button>

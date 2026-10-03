@@ -1,53 +1,75 @@
 import init, { Engine } from '../engine/engine.js';
+import type { ExemptSpan, PipelineConfig, Step, WorkerRequest, WorkerResponse } from '../types/pipeline';
 
 let engine: Engine | null = null;
 
-self.onmessage = async (e) => {
-    const { type } = e.data;
+const post = (message: WorkerResponse) => self.postMessage(message);
 
-    if (type === 'init') {
+const runPipeline = (input: string, steps: Step[]): string =>
+    engine!.run_pipeline(input, JSON.stringify({ version: 1, steps } satisfies PipelineConfig));
+
+/**
+ * Runs the pipeline and, when a step is selected for inspection, also produces the text as it
+ * looked immediately before and after that step.
+ *
+ * The canonical map is read before the diff runs, because each `run_pipeline` call resets the
+ * engine's canonical state and the map must describe `output`, not a partial pipeline.
+ */
+const run = (input: string, config: PipelineConfig, inspectStepId: string | null) => {
+    const output = runPipeline(input, config.steps);
+    // Both reads must happen before the diff runs: each run_pipeline call resets the engine's
+    // canonical map and span list, and these must describe `output`.
+    const map = JSON.parse(engine!.get_canonical_map_json());
+    const exemptSpans: ExemptSpan[] = JSON.parse(engine!.get_exempt_spans_json());
+
+    let diffOriginal = '';
+    let diffModified = '';
+
+    if (inspectStepId) {
+        // config.steps only contains enabled steps, so a disabled step yields no diff.
+        const selectedIndex = config.steps.findIndex(s => s.id === inspectStepId);
+        if (selectedIndex !== -1) {
+            diffOriginal = runPipeline(input, config.steps.slice(0, selectedIndex));
+            diffModified = selectedIndex === config.steps.length - 1
+                ? output // the last step's "after" is the final output; no need to recompute
+                : runPipeline(input, config.steps.slice(0, selectedIndex + 1));
+        }
+    }
+
+    post({ type: 'result', output, map, exemptSpans, diffOriginal, diffModified });
+};
+
+self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
+    const message = e.data;
+
+    if (message.type === 'init') {
         try {
             await init();
             engine = new Engine();
-            self.postMessage({ type: 'ready' });
+            post({ type: 'ready' });
         } catch (err) {
-            self.postMessage({ type: 'error', error: `Failed to initialize engine: ${(err as Error).message || String(err)}` });
+            post({ type: 'error', error: `Failed to initialize engine: ${(err as Error).message || String(err)}` });
         }
         return;
     }
 
-    if (type === 'run' && engine) {
+    if (message.type === 'run') {
+        if (!engine) {
+            post({ type: 'error', error: 'Engine is not initialised yet' });
+            return;
+        }
         try {
-            const { input, config, inspectStepId, id } = e.data;
-
-            const output = engine.run_pipeline(input, JSON.stringify(config));
-            const mapJson = engine.get_canonical_map_json();
-
-            let diffOriginal = '';
-            let diffModified = '';
-
-            if (inspectStepId) {
-                type Step = { id: string; enabled: boolean };
-                const selectedIndex = (config.steps as Step[]).findIndex(s => s.id === inspectStepId);
-                if (selectedIndex !== -1) {
-                const prevSteps = (config.steps as Step[]).slice(0, selectedIndex).filter(s => s.enabled);
-                    diffOriginal = engine.run_pipeline(input, JSON.stringify({ version: 1, steps: prevSteps }));
-                    const currSteps = (config.steps as Step[]).slice(0, selectedIndex + 1).filter(s => s.enabled);
-                    diffModified = engine.run_pipeline(input, JSON.stringify({ version: 1, steps: currSteps }));
-                }
-            }
-
-            self.postMessage({ type: 'result', output, map: JSON.parse(mapJson) as unknown, diffOriginal, diffModified, id });
+            run(message.input, message.config, message.inspectStepId);
         } catch (err) {
-            self.postMessage({ type: 'error', error: (err as Error).message || String(err), id: e.data.id });
+            post({ type: 'error', error: (err as Error).message || String(err) });
         }
     }
 };
 
 self.onerror = (message, _source, _lineno, _colno, error) => {
-    self.postMessage({ type: 'error', error: `Worker error: ${message || error?.message || 'Unknown error'}` });
+    post({ type: 'error', error: `Worker error: ${message || error?.message || 'Unknown error'}` });
     return true;
 };
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export default null as any;
+// The `?worker&inline` import only needs a default export to satisfy the module shape.
+export default null as unknown as never;

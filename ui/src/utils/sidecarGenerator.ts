@@ -7,21 +7,15 @@ function escapeHtml(str: string): string {
         .replace(/'/g, '&#39;');
 }
 
-// JSON.stringify does not escape </script>, which can break inline script blocks.
-function safeJsonStringify(data: unknown): string {
-    return JSON.stringify(data)
-        .replace(/</g, '\\u003c')
-        .replace(/>/g, '\\u003e')
-        .replace(/&/g, '\\u0026');
-}
-
 export const generateMappingSidecar = (
     canonicalMap: unknown,
     fileName: string
 ) => {
     const timestamp = new Date().toISOString();
     type Entry = { id: string; type: string; method?: string; context_before?: string; context_after?: string; original: string; occurrences: number };
-    const canonical = ((canonicalMap as Record<string, unknown>).canonical ?? {}) as Record<string, Entry>;
+    const map = canonicalMap as { canonical?: Record<string, Entry>; meta?: { engine_version?: string } };
+    const canonical = map.canonical ?? {};
+    const engineVersion = map.meta?.engine_version ?? 'unknown';
     const entries = Object.values(canonical);
     const totalRedactions = entries.reduce((acc, v) => acc + (v.occurrences || 0), 0);
 
@@ -46,7 +40,7 @@ export const generateMappingSidecar = (
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none';">
     <title>ScrubChef Mapping - ${escapeHtml(fileName)}</title>
     <style>
         :root {
@@ -91,6 +85,7 @@ export const generateMappingSidecar = (
             <div class="meta-item"><label>Source File</label><div>${escapeHtml(fileName)}</div></div>
             <div class="meta-item"><label>Generated At</label><div>${escapeHtml(new Date(timestamp).toLocaleString())}</div></div>
             <div class="meta-item"><label>Total Redactions</label><div>${totalRedactions}</div></div>
+            <div class="meta-item"><label>Engine Version</label><div>${escapeHtml(engineVersion)}</div></div>
         </div>
         <input type="text" class="search-box" placeholder="Search for tokens (e.g. EMAIL_1) or original values..." oninput="filterTable(this.value)">
         <table class="mapping-table">
@@ -101,7 +96,6 @@ export const generateMappingSidecar = (
         </table>
     </div>
     <script>
-        const canonicalMap = ${safeJsonStringify(canonicalMap)};
         function filterTable(query) {
             const rows = document.querySelectorAll('#table-body tr');
             const q = query.toLowerCase();

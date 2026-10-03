@@ -1,0 +1,99 @@
+# Reusable build for the single-file distributable.
+#
+# Both deploy.yml and release-please.yml used to carry their own verbatim copy of these
+# steps. Keeping one definition means the released artifact cannot drift between the two
+# paths that produce it.
+name: Build Artifact
+
+on:
+  workflow_call:
+    outputs:
+      version:
+        description: Version read from ui/package.json
+        value: ${{ jobs.build.outputs.version }}
+      artifact-name:
+        description: File name of the built single-page app
+        value: ${{ jobs.build.outputs.artifact-name }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.vars.outputs.version }}
+      artifact-name: ${{ steps.vars.outputs.artifact-name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            engine/target
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('engine/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-wasm-
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: latest
+
+      - name: Build WASM engine
+        run: wasm-pack build --target web
+        working-directory: engine
+
+      - name: Copy WASM artifacts to UI
+        run: |
+          mkdir -p ui/src/engine
+          cp engine/pkg/engine.js \
+             engine/pkg/engine_bg.wasm \
+             engine/pkg/engine.d.ts \
+             engine/pkg/engine_bg.wasm.d.ts \
+             ui/src/engine/
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install UI dependencies
+        run: npm ci
+        working-directory: ui
+
+      - name: Build UI (single file)
+        run: npm run build
+        working-directory: ui
+
+      - name: Resolve version and artifact name
+        id: vars
+        run: |
+          VERSION=$(node -p "require('./ui/package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "artifact-name=ScrubChef-$VERSION.html" >> "$GITHUB_OUTPUT"
+
+      - name: Name the release artifact
+        run: cp ui/dist/index.html "ui/dist/${{ steps.vars.outputs.artifact-name }}"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./ui/dist
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scrubchef-html
+          path: ui/dist/${{ steps.vars.outputs.artifact-name }}
+          if-no-files-found: error
