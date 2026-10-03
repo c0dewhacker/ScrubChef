@@ -297,10 +297,58 @@ fn is_valid_ssn(captures: &regex::Captures) -> bool {
 
 // --- Data structures ---
 
-#[derive(Clone, Debug)]
-struct ClaimedRegion {
-    start: usize,
-    end: usize,
+/// Why a span of the current text is off-limits to the remaining steps.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ProtectionKind {
+    /// Text a step already replaced. Re-matching it only corrupts the placeholder.
+    Redacted,
+    /// A value the user configured to keep, via an allowlist or a subnet exclusion.
+    /// Honouring that across the whole pipeline is the point of the option.
+    Exempt,
+}
+
+/// A byte range of the *current* text that later steps must leave alone.
+///
+/// Spans are translated forward through every rewrite, so by the end of the run they address
+/// the final output. The list is kept sorted by `start` and non-overlapping.
+#[derive(Serialize, Clone, Debug)]
+pub struct ProtectedSpan {
+    pub start: usize,
+    pub end: usize,
+    pub kind: ProtectionKind,
+    /// Token prefix of the step that claimed it, so the UI can say which rule applied.
+    pub rule: String,
+}
+
+/// What a detector's filter decided about a candidate match.
+///
+/// Replaces a plain `bool`, which conflated two very different rejections: "this is not
+/// really an instance of this type" (a later step should still be free to match it) and
+/// "the user asked to keep this" (nothing may touch it again).
+enum MatchVerdict {
+    Redact,
+    /// Failed a validity check, e.g. Luhn or an SSN reserved range.
+    NotAMatch,
+    /// Excluded by user configuration.
+    Exempt,
+}
+
+/// Candidate matches from one detector pass.
+struct Candidates {
+    /// Ranges to replace, ascending and non-overlapping, with the matched text.
+    hits: Vec<(usize, usize, String)>,
+    /// Ranges the user configured to keep.
+    exempt: Vec<(usize, usize)>,
+}
+
+impl Candidates {
+    fn from_hits(hits: Vec<(usize, usize, String)>) -> Self {
+        Self {
+            hits,
+            exempt: Vec::new(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -347,7 +395,8 @@ pub struct Engine {
     session_secret: [u8; 32],
     canonical_map: HashMap<String, CanonicalEntry>,
     next_ids: HashMap<String, usize>,
-    claimed_regions: Vec<ClaimedRegion>,
+    /// Spans protected for the remainder of the current pipeline run.
+    protected_spans: Vec<ProtectedSpan>,
 }
 
 impl Drop for Engine {
@@ -372,7 +421,7 @@ impl Engine {
             session_secret: secret,
             canonical_map: HashMap::new(),
             next_ids: HashMap::new(),
-            claimed_regions: Vec::new(),
+            protected_spans: Vec::new(),
         }
     }
 
@@ -380,7 +429,7 @@ impl Engine {
         let config: PipelineConfig = serde_json::from_str(config_json)
             .map_err(|e| JsValue::from_str(&format!("Invalid pipeline config: {}", e)))?;
 
-        self.claimed_regions.clear();
+        self.protected_spans.clear();
         self.canonical_map.clear();
         self.next_ids.clear();
 
@@ -392,8 +441,6 @@ impl Engine {
     }
 
     fn execute_step(&mut self, step: &StepConfig, text: &str) -> Result<String, JsValue> {
-        self.claimed_regions.clear();
-
         let type_prefix = if let Some(label) = &step.label {
             if !label.is_empty() {
                 // Cap label length to 64 chars to prevent oversized tokens.
@@ -479,21 +526,33 @@ impl Engine {
         text: &str,
         regex: &Regex,
         capture_group: usize,
-        extra_filter: impl Fn(&Captures) -> bool,
-    ) -> Vec<(usize, usize, String)> {
-        regex
-            .captures_iter(text)
-            .filter_map(|cap| {
-                let m = cap.get(capture_group)?;
-                if !extra_filter(&cap) {
-                    return None;
+        verdict_of: impl Fn(&Captures) -> MatchVerdict,
+    ) -> Candidates {
+        let mut hits = Vec::new();
+        let mut exempt = Vec::new();
+
+        for cap in regex.captures_iter(text) {
+            let Some(m) = cap.get(capture_group) else {
+                continue;
+            };
+            match verdict_of(&cap) {
+                MatchVerdict::NotAMatch => continue,
+                MatchVerdict::Exempt => {
+                    // Protect the whole match, not just the capture group: allowlisting
+                    // "corp.com" means keeping "ops@corp.com" intact, including the local
+                    // part a later username step would otherwise mask.
+                    let whole = cap.get(0).unwrap_or(m);
+                    exempt.push((whole.start(), whole.end()));
                 }
-                if self.is_region_claimed(m.start(), m.end()) {
-                    return None;
+                MatchVerdict::Redact => {
+                    if !self.is_protected(m.start(), m.end()) {
+                        hits.push((m.start(), m.end(), m.as_str().to_string()));
+                    }
                 }
-                Some((m.start(), m.end(), m.as_str().to_string()))
-            })
-            .collect()
+            }
+        }
+
+        Candidates { hits, exempt }
     }
 
     // Records a hit in the canonical map (collapsing repeat values onto one token) and returns
@@ -544,31 +603,117 @@ impl Engine {
 
     // Rebuilds the text in a single forward pass. The previous implementation called
     // `replace_range` per hit and tracked a running offset, which was O(n) per replacement.
-    fn apply_hits(
-        &mut self,
-        text: &str,
-        hits: Vec<(usize, usize, String)>,
-        spec: &PassSpec,
-    ) -> String {
+    fn apply_hits(&mut self, text: &str, candidates: Candidates, spec: &PassSpec) -> String {
+        let Candidates { hits, exempt } = candidates;
+
         if hits.is_empty() {
+            // Nothing moves, so the existing spans stay valid as they are.
+            self.record_spans(&exempt, ProtectionKind::Exempt, spec.type_upper);
             return text.to_string();
         }
+
         let mut result = String::with_capacity(text.len());
         let mut cursor = 0usize;
+        // (old offset, new offset) at the start of each copied run of untouched text, used to
+        // translate surviving spans into the rewritten string's coordinates.
+        let mut checkpoints: Vec<(usize, usize)> = Vec::with_capacity(hits.len() + 1);
+        // Replacement spans, already in new coordinates.
+        let mut written: Vec<(usize, usize)> = Vec::with_capacity(hits.len());
+
         for (start, end, original) in hits {
             // captures_iter yields ascending, non-overlapping matches; guard anyway so a
             // malformed hit list can never panic on a reversed slice.
             if start < cursor {
                 continue;
             }
+            checkpoints.push((cursor, result.len()));
             result.push_str(&text[cursor..start]);
+
             let canonical_id = self.register_hit(text, start, end, &original, spec);
-            result.push_str(&self.apply_redaction_mode(&original, &canonical_id, spec.config));
+            let replacement = self.apply_redaction_mode(&original, &canonical_id, spec.config);
+            let written_start = result.len();
+            result.push_str(&replacement);
+            written.push((written_start, result.len()));
             cursor = end;
-            self.claimed_regions.push(ClaimedRegion { start, end });
         }
+        checkpoints.push((cursor, result.len()));
         result.push_str(&text[cursor..]);
+
+        // Every span that survives this pass sits in text that was copied verbatim, because
+        // hits overlapping a protected span were dropped at collection time and a pass cannot
+        // both redact and exempt the same range.
+        let translate = |offset: usize| -> usize {
+            let i = checkpoints.partition_point(|(old, _)| *old <= offset);
+            let (old, new) = checkpoints[i.saturating_sub(1)];
+            new + offset.saturating_sub(old)
+        };
+
+        let mut next: Vec<ProtectedSpan> = self
+            .protected_spans
+            .drain(..)
+            .map(|span| ProtectedSpan {
+                start: translate(span.start),
+                end: translate(span.end),
+                ..span
+            })
+            .collect();
+
+        next.extend(exempt.iter().map(|(start, end)| ProtectedSpan {
+            start: translate(*start),
+            end: translate(*end),
+            kind: ProtectionKind::Exempt,
+            rule: spec.type_upper.to_string(),
+        }));
+        next.extend(written.into_iter().map(|(start, end)| ProtectedSpan {
+            start,
+            end,
+            kind: ProtectionKind::Redacted,
+            rule: spec.type_upper.to_string(),
+        }));
+
+        self.protected_spans = Self::normalise_spans(next);
         result
+    }
+
+    /// Adds spans that need no translation, because the text did not change.
+    fn record_spans(&mut self, spans: &[(usize, usize)], kind: ProtectionKind, rule: &str) {
+        if spans.is_empty() {
+            return;
+        }
+        let mut next = std::mem::take(&mut self.protected_spans);
+        next.extend(spans.iter().map(|(start, end)| ProtectedSpan {
+            start: *start,
+            end: *end,
+            kind,
+            rule: rule.to_string(),
+        }));
+        self.protected_spans = Self::normalise_spans(next);
+    }
+
+    /// Sorts by start and merges touching or overlapping spans, so the list stays sorted by
+    /// both ends and `is_protected` can binary-search it.
+    ///
+    /// Overlaps in practice only come from two steps exempting the same range, which carry the
+    /// same kind; a redacted span and an exempt span always occupy disjoint text.
+    fn normalise_spans(mut spans: Vec<ProtectedSpan>) -> Vec<ProtectedSpan> {
+        spans.retain(|s| s.end > s.start);
+        spans.sort_by_key(|s| (s.start, s.end));
+
+        let mut merged: Vec<ProtectedSpan> = Vec::with_capacity(spans.len());
+        for span in spans {
+            match merged.last_mut() {
+                Some(last) if span.start <= last.end => {
+                    last.end = last.end.max(span.end);
+                    // Prefer Exempt when reporting: it is the one the user asked for.
+                    if span.kind == ProtectionKind::Exempt {
+                        last.kind = ProtectionKind::Exempt;
+                        last.rule = span.rule;
+                    }
+                }
+                _ => merged.push(span),
+            }
+        }
+        merged
     }
 
     // Single entry point for every regex-driven detector.
@@ -578,10 +723,10 @@ impl Engine {
         regex: &Regex,
         capture_group: usize,
         spec: &PassSpec,
-        extra_filter: impl Fn(&Captures) -> bool,
+        verdict_of: impl Fn(&Captures) -> MatchVerdict,
     ) -> Result<String, JsValue> {
-        let hits = self.collect_hits(text, regex, capture_group, extra_filter);
-        Ok(self.apply_hits(text, hits, spec))
+        let candidates = self.collect_hits(text, regex, capture_group, verdict_of);
+        Ok(self.apply_hits(text, candidates, spec))
     }
 
     fn redact_with_regex_filtered(
@@ -591,14 +736,14 @@ impl Engine {
         type_upper: &str,
         type_lower: &str,
         config: &serde_json::Value,
-        extra_filter: impl Fn(&Captures) -> bool,
+        verdict_of: impl Fn(&Captures) -> MatchVerdict,
     ) -> Result<String, JsValue> {
         let spec = PassSpec {
             type_upper,
             type_lower,
             config,
         };
-        self.redact_matches(text, regex, 0, &spec, extra_filter)
+        self.redact_matches(text, regex, 0, &spec, verdict_of)
     }
 
     fn redact_with_regex(
@@ -614,7 +759,7 @@ impl Engine {
             type_lower,
             config,
         };
-        self.redact_matches(text, regex, 0, &spec, |_| true)
+        self.redact_matches(text, regex, 0, &spec, |_| MatchVerdict::Redact)
     }
 
     fn redact_captures(
@@ -631,7 +776,7 @@ impl Engine {
             type_lower,
             config,
         };
-        self.redact_matches(text, regex, capture_group, &spec, |_| true)
+        self.redact_matches(text, regex, capture_group, &spec, |_| MatchVerdict::Redact)
     }
 
     // --- Detectors with domain/subnet filtering ---
@@ -659,15 +804,20 @@ impl Engine {
         }
 
         self.redact_with_regex_filtered(text, &RE_EMAIL, type_prefix, "email", config, |cap| {
-            let matched = &cap[0];
-            let domain = matched
+            let domain = cap[0]
                 .split_once('@')
                 .map(|(_, d)| d)
                 .unwrap_or("")
                 .to_lowercase();
-            !allowed_domains
+            let allowed = allowed_domains
                 .iter()
-                .any(|ad| domain == *ad || domain.ends_with(&format!(".{}", ad)))
+                .any(|ad| domain == *ad || domain.ends_with(&format!(".{}", ad)));
+            // The user asked to keep these, so protect them from the rest of the pipeline.
+            if allowed {
+                MatchVerdict::Exempt
+            } else {
+                MatchVerdict::Redact
+            }
         })
     }
 
@@ -694,9 +844,14 @@ impl Engine {
         }
 
         self.redact_with_regex_filtered(text, &RE_IPV4, type_prefix, "ipv4", config, |cap| {
-            !excluded_subnets
+            let excluded = excluded_subnets
                 .iter()
-                .any(|cidr| is_in_subnet(&cap[0], cidr))
+                .any(|cidr| is_in_subnet(&cap[0], cidr));
+            if excluded {
+                MatchVerdict::Exempt
+            } else {
+                MatchVerdict::Redact
+            }
         })
     }
 
@@ -712,7 +867,15 @@ impl Engine {
             type_prefix,
             "credit_card",
             config,
-            |cap| luhn_check(&cap[0]),
+            // A failed Luhn check means this was never a card number, so later steps stay
+            // free to match the same digits.
+            |cap| {
+                if luhn_check(&cap[0]) {
+                    MatchVerdict::Redact
+                } else {
+                    MatchVerdict::NotAMatch
+                }
+            },
         )
     }
 
@@ -722,7 +885,13 @@ impl Engine {
         config: &serde_json::Value,
         type_prefix: &str,
     ) -> Result<String, JsValue> {
-        self.redact_with_regex_filtered(text, &RE_SSN, type_prefix, "ssn", config, is_valid_ssn)
+        self.redact_with_regex_filtered(text, &RE_SSN, type_prefix, "ssn", config, |cap| {
+            if is_valid_ssn(cap) {
+                MatchVerdict::Redact
+            } else {
+                MatchVerdict::NotAMatch
+            }
+        })
     }
 
     fn redact_regex(
@@ -843,8 +1012,8 @@ impl Engine {
             hits.push((s, e, text[s..e].to_string()));
         }
 
-        hits.retain(|(s, e, _)| !self.is_region_claimed(*s, *e));
-        Ok(self.apply_hits(text, hits, &spec))
+        hits.retain(|(s, e, _)| !self.is_protected(*s, *e));
+        Ok(self.apply_hits(text, Candidates::from_hits(hits), &spec))
     }
 
     fn redact_username(
@@ -918,7 +1087,7 @@ impl Engine {
             .find_iter(text)
             .filter_map(|m| {
                 let span = scan_json_value(text, m.end())?;
-                if span.end <= span.start || self.is_region_claimed(span.start, span.end) {
+                if span.end <= span.start || self.is_protected(span.start, span.end) {
                     return None;
                 }
                 Some((span.start, span.end, text[span.start..span.end].to_string()))
@@ -930,7 +1099,7 @@ impl Engine {
             type_lower: "json_key",
             config,
         };
-        Ok(self.apply_hits(text, hits, &spec))
+        Ok(self.apply_hits(text, Candidates::from_hits(hits), &spec))
     }
 
     fn redact_query_param(
@@ -955,10 +1124,14 @@ impl Engine {
         })
     }
 
-    fn is_region_claimed(&self, start: usize, end: usize) -> bool {
-        self.claimed_regions
-            .iter()
-            .any(|r| !(end <= r.start || start >= r.end))
+    /// True when `start..end` overlaps anything an earlier step redacted or exempted.
+    fn is_protected(&self, start: usize, end: usize) -> bool {
+        // The list is sorted and non-overlapping, so the first span that could overlap is the
+        // first whose end is past `start`.
+        let from = self.protected_spans.partition_point(|s| s.end <= start);
+        self.protected_spans
+            .get(from)
+            .is_some_and(|s| s.start < end)
     }
 
     /// `maskLength` > 0 pins the mask to a fixed number of characters. Absent or 0 keeps the
@@ -1020,6 +1193,21 @@ impl Engine {
         let mut mac = Hmac::<Sha256>::new_from_slice(&self.session_secret).unwrap();
         mac.update(value.as_bytes());
         hex::encode(mac.finalize().into_bytes())
+    }
+
+    /// Spans of the final output that were deliberately kept, as
+    /// `[{ start, end, kind, rule }]` in byte offsets.
+    ///
+    /// Because every pass translates its spans forward, these already address the string
+    /// `run_pipeline` returned. Only exemptions are reported: redacted spans are visible as
+    /// placeholders already.
+    pub fn get_exempt_spans_json(&self) -> String {
+        let exempt: Vec<&ProtectedSpan> = self
+            .protected_spans
+            .iter()
+            .filter(|s| s.kind == ProtectionKind::Exempt)
+            .collect();
+        serde_json::to_string(&exempt).unwrap_or_else(|_| "[]".to_string())
     }
 
     pub fn get_canonical_map_json(&self) -> String {
@@ -1692,13 +1880,33 @@ mod tests {
     // --- Cross-step interaction (documented current behaviour, not yet protected) ---
 
     #[test]
-    fn allowlisted_email_is_still_damaged_by_later_steps() {
-        // KNOWN LIMITATION. `claimed_regions` is cleared at the start of every step, so it
-        // only prevents overlap *within* one pass. A value the email step deliberately
-        // skipped is still fair game for the hostname step that follows, which makes the
-        // "Allowed Domains" option misleading end-to-end.
+    fn allowlisted_email_survives_later_steps() {
+        // An allowlisted value is protected for the rest of the run, including the local part
+        // a username step would mask and the domain a hostname step would match.
         let out = run(
             "reporter ops@corp.com end",
+            vec![
+                step(
+                    "email",
+                    serde_json::json!({ "allowedDomains": ["corp.com"] }),
+                ),
+                serde_json::json!({
+                    "id": "s2", "type": "username", "enabled": true, "label": null, "config": {}
+                }),
+                serde_json::json!({
+                    "id": "s3", "type": "hostname", "enabled": true, "label": null, "config": {}
+                }),
+            ],
+        );
+        assert_eq!(out, "reporter ops@corp.com end");
+    }
+
+    #[test]
+    fn exemption_is_scoped_to_the_matched_span_not_the_value() {
+        // Allowlisting the domain keeps the address intact, but an unrelated hostname using
+        // the same domain is still redacted.
+        let out = run(
+            "mail ops@corp.com host api.corp.com",
             vec![
                 step(
                     "email",
@@ -1709,16 +1917,30 @@ mod tests {
                 }),
             ],
         );
-        assert_eq!(out, "reporter ops@<HOSTNAME_1> end");
-        assert!(
-            !out.contains("ops@corp.com"),
-            "allowlist does not survive later steps"
-        );
+        assert_eq!(out, "mail ops@corp.com host <HOSTNAME_1>");
     }
 
     #[test]
-    fn emitted_placeholders_can_be_matched_again_by_later_steps() {
-        // Same root cause: the token text itself is not protected once a step has written it.
+    fn excluded_subnet_survives_later_steps() {
+        let out = run(
+            "internal 10.4.1.9 and 8.8.8.8",
+            vec![
+                step(
+                    "ipv4",
+                    serde_json::json!({ "excludeSubnets": ["10.0.0.0/8"] }),
+                ),
+                serde_json::json!({
+                    "id": "s2", "type": "regex", "enabled": true, "label": "Digits",
+                    "config": { "pattern": r"\d+\.\d+\.\d+\.\d+" }
+                }),
+            ],
+        );
+        assert_eq!(out, "internal 10.4.1.9 and <IPV4_1>");
+    }
+
+    #[test]
+    fn emitted_placeholders_are_not_matched_again() {
+        // The token a step wrote is protected, so a later rule cannot chew into it.
         let out = run(
             "a@x.com",
             vec![
@@ -1729,7 +1951,152 @@ mod tests {
                 }),
             ],
         );
-        assert_eq!(out, "<<SECOND_1>>");
+        assert_eq!(out, "<EMAIL_1>");
+    }
+
+    #[test]
+    fn a_validity_rejection_does_not_protect_the_text() {
+        // A non-Luhn digit run was never a card, so a later rule may still redact it.
+        let out = run(
+            "ref 1234567812345678 end",
+            vec![
+                step("credit_card", serde_json::json!({})),
+                serde_json::json!({
+                    "id": "s2", "type": "regex", "enabled": true, "label": "Digits",
+                    "config": { "pattern": r"\d{16}" }
+                }),
+            ],
+        );
+        assert_eq!(out, "ref <DIGITS_1> end");
+    }
+
+    #[test]
+    fn protection_survives_length_changing_rewrites() {
+        // The exempt span sits after a replacement that shortens the text, so its offsets must
+        // be translated, not just carried.
+        let out = run(
+            "token sk_abcdefghij1234567890 keep ops@corp.com tail",
+            vec![
+                step("apikey", serde_json::json!({})),
+                step(
+                    "email",
+                    serde_json::json!({ "allowedDomains": ["corp.com"] }),
+                ),
+                serde_json::json!({
+                    "id": "s3", "type": "hostname", "enabled": true, "label": null, "config": {}
+                }),
+            ],
+        );
+        assert_eq!(out, "token <APIKEY_1> keep ops@corp.com tail");
+    }
+
+    #[test]
+    fn exempt_spans_are_reported_in_final_output_coordinates() {
+        let mut engine = Engine::new();
+        let cfg = pipeline(vec![
+            step("apikey", serde_json::json!({})),
+            step(
+                "email",
+                serde_json::json!({ "allowedDomains": ["corp.com"] }),
+            ),
+        ]);
+        let out = engine
+            .run_pipeline("k sk_abcdefghij1234567890 m ops@corp.com", &cfg)
+            .unwrap();
+        let spans: serde_json::Value =
+            serde_json::from_str(&engine.get_exempt_spans_json()).unwrap();
+        let span = &spans[0];
+        let (start, end) = (
+            span["start"].as_u64().unwrap() as usize,
+            span["end"].as_u64().unwrap() as usize,
+        );
+        assert_eq!(&out[start..end], "ops@corp.com");
+        assert_eq!(span["kind"], "exempt");
+        assert_eq!(span["rule"], "EMAIL");
+    }
+
+    #[test]
+    fn protection_holds_at_the_very_start_and_end_of_the_text() {
+        let out = run(
+            "ops@corp.com",
+            vec![
+                step(
+                    "email",
+                    serde_json::json!({ "allowedDomains": ["corp.com"] }),
+                ),
+                serde_json::json!({
+                    "id": "s2", "type": "hostname", "enabled": true, "label": null, "config": {}
+                }),
+            ],
+        );
+        assert_eq!(out, "ops@corp.com");
+    }
+
+    #[test]
+    fn adjacent_protected_spans_do_not_block_the_text_between_them() {
+        // Two tokens written back to back must not merge into a span that swallows the
+        // separator, or a later step could never match anything in between.
+        let out = run(
+            "a@x.com b@y.com middle c@z.com",
+            vec![
+                step("email", serde_json::json!({})),
+                serde_json::json!({
+                    "id": "s2", "type": "regex", "enabled": true, "label": "Mid",
+                    "config": { "pattern": "middle" }
+                }),
+            ],
+        );
+        assert_eq!(out, "<EMAIL_1> <EMAIL_2> <MID_1> <EMAIL_3>");
+    }
+
+    #[test]
+    fn repeated_exemption_of_the_same_span_is_idempotent() {
+        // Two email steps with the same allowlist exempt the same range twice; the merged
+        // span list must stay well formed.
+        let out = run(
+            "ops@corp.com and api.corp.com",
+            vec![
+                step(
+                    "email",
+                    serde_json::json!({ "allowedDomains": ["corp.com"] }),
+                ),
+                serde_json::json!({
+                    "id": "s2", "type": "email", "enabled": true, "label": null,
+                    "config": { "allowedDomains": ["corp.com"] }
+                }),
+                serde_json::json!({
+                    "id": "s3", "type": "hostname", "enabled": true, "label": null, "config": {}
+                }),
+            ],
+        );
+        assert_eq!(out, "ops@corp.com and <HOSTNAME_1>");
+    }
+
+    #[test]
+    fn many_protected_spans_stay_fast_across_steps() {
+        // is_protected binary-searches the sorted span list; a linear scan here would make
+        // the second step quadratic in the number of redactions from the first.
+        let input = (0..5_000)
+            .map(|i| format!("user{}@example.com ", i))
+            .collect::<String>();
+        let out = run(
+            &input,
+            vec![
+                step("email", serde_json::json!({})),
+                serde_json::json!({
+                    "id": "s2", "type": "regex", "enabled": true, "label": "Tok",
+                    "config": { "pattern": "EMAIL_[0-9]+" }
+                }),
+            ],
+        );
+        assert!(
+            out.contains("<EMAIL_5000>"),
+            "tokens must survive the second step"
+        );
+        assert!(
+            !out.contains("<TOK_"),
+            "protected tokens must not be re-matched"
+        );
     }
 
     // --- Multi-step pipelines ---
