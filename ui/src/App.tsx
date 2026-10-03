@@ -27,7 +27,7 @@ import { AVAILABLE_OPERATIONS, defaultConfigFor, engineTypeFor } from './data/op
 import EngineWorker from './utils/engineWorker?worker&inline';
 import { EMPTY_CANONICAL_MAP } from './types/pipeline';
 import type {
-  CanonicalEntry, CanonicalMap, PipelineConfig, Step, StepSettings, WorkerResponse,
+  CanonicalEntry, CanonicalMap, ExemptSpan, PipelineConfig, Step, StepSettings, WorkerResponse,
 } from './types/pipeline';
 import { newStepId } from './utils/stepId';
 import { normaliseCsvFields } from './utils/normaliseConfig';
@@ -44,6 +44,7 @@ function App() {
   const [engineLoaded, setEngineLoaded] = useState(false)
   const [steps, setSteps] = useState<Step[]>([])
   const [canonicalMap, setCanonicalMap] = useState<CanonicalMap>(EMPTY_CANONICAL_MAP)
+  const [exemptSpans, setExemptSpans] = useState<ExemptSpan[]>([])
 
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const selectedStepIdRef = useRef<string | null>(null);
@@ -145,6 +146,7 @@ function App() {
       } else if (msg.type === 'result') {
         setOutput(msg.output);
         setCanonicalMap(msg.map);
+        setExemptSpans(msg.exemptSpans ?? []);
         setDiffOriginal(msg.diffOriginal || '');
         setDiffModified(msg.diffModified || '');
         drainQueue();
@@ -379,6 +381,7 @@ function App() {
     setFileName(null);
     setOutput('');
     setCanonicalMap(EMPTY_CANONICAL_MAP);
+    setExemptSpans([]);
   };
 
   const handleLoadExample = (recipeSteps: Step[]) => {
@@ -437,6 +440,15 @@ function App() {
             <span className="text-gray-400">Redactions:</span>
             <span className="font-mono font-bold text-purple-400">{totalRedactions}</span>
           </div>
+          {exemptSpans.length > 0 && (
+            <div
+              className="flex items-center gap-2 px-4 py-2 bg-[#10b981]/10 rounded-xl border border-[#10b981]/20"
+              title="Values an allowlist or subnet exclusion kept on purpose. They are protected from every later step."
+            >
+              <span className="text-[#10b981]/70">Kept:</span>
+              <span className="font-mono font-bold text-[#10b981]">{exemptSpans.length}</span>
+            </div>
+          )}
         </div>
         <button
           onClick={handleExport}
@@ -610,7 +622,18 @@ function App() {
                         </div>
                       </div>
                     ) : (
-                      splitTokens(output, (id) => canonicalMapById.has(id)).map((segment, i) => {
+                      splitTokens(output, (id) => canonicalMapById.has(id), exemptSpans).map((segment, i) => {
+                        if (segment.kind === 'exempt') {
+                          return (
+                            <span
+                              key={i}
+                              className="text-[#10b981] bg-[#10b981]/10 border-b border-dashed border-[#10b981]/50 rounded-sm px-0.5 cursor-help"
+                              title={`Kept deliberately by the ${segment.rule} step's allow rule`}
+                            >
+                              {segment.value}
+                            </span>
+                          );
+                        }
                         if (segment.kind === 'token') {
                           const entry = canonicalMapById.get(segment.tokenId);
                           return (

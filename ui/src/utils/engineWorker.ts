@@ -1,5 +1,5 @@
 import init, { Engine } from '../engine/engine.js';
-import type { PipelineConfig, Step, WorkerRequest, WorkerResponse } from '../types/pipeline';
+import type { ExemptSpan, PipelineConfig, Step, WorkerRequest, WorkerResponse } from '../types/pipeline';
 
 let engine: Engine | null = null;
 
@@ -17,7 +17,10 @@ const runPipeline = (input: string, steps: Step[]): string =>
  */
 const run = (input: string, config: PipelineConfig, inspectStepId: string | null) => {
     const output = runPipeline(input, config.steps);
+    // Both reads must happen before the diff runs: each run_pipeline call resets the engine's
+    // canonical map and span list, and these must describe `output`.
     const map = JSON.parse(engine!.get_canonical_map_json());
+    const exemptSpans: ExemptSpan[] = JSON.parse(engine!.get_exempt_spans_json());
 
     let diffOriginal = '';
     let diffModified = '';
@@ -33,7 +36,7 @@ const run = (input: string, config: PipelineConfig, inspectStepId: string | null
         }
     }
 
-    post({ type: 'result', output, map, diffOriginal, diffModified });
+    post({ type: 'result', output, map, exemptSpans, diffOriginal, diffModified });
 };
 
 self.onmessage = async (e: MessageEvent<WorkerRequest>) => {

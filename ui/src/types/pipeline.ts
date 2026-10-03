@@ -76,6 +76,19 @@ export interface CanonicalMap {
 
 export const EMPTY_CANONICAL_MAP: CanonicalMap = { meta: {}, canonical: {} };
 
+/**
+ * A span of the final output that a rule deliberately preserved — an email allowlist or an
+ * IPv4 subnet exclusion. Byte offsets into the output string, as returned by
+ * `Engine.get_exempt_spans_json`.
+ */
+export interface ExemptSpan {
+    start: number;
+    end: number;
+    kind: 'exempt';
+    /** Token prefix of the step that kept it, e.g. "EMAIL". */
+    rule: string;
+}
+
 /** Messages posted into the engine worker. */
 export type WorkerRequest =
     | { type: 'init' }
@@ -84,5 +97,12 @@ export type WorkerRequest =
 /** Messages posted back out of the engine worker. */
 export type WorkerResponse =
     | { type: 'ready' }
-    | { type: 'result'; output: string; map: CanonicalMap; diffOriginal: string; diffModified: string }
+    | {
+        type: 'result';
+        output: string;
+        map: CanonicalMap;
+        exemptSpans: ExemptSpan[];
+        diffOriginal: string;
+        diffModified: string;
+    }
     | { type: 'error'; error: string };
