@@ -30,7 +30,9 @@ lto = true
 codegen-units = 1
 strip = true
 
-# At opt-level "z" rustc emits bulk-memory ops (memory.copy) for struct moves. wasm-opt
-# must be told to accept them, or it fails validation on older wasm-pack builds.
+# wasm-opt validates against an explicit feature set and rejects anything not enabled, so a
+# toolchain upgrade that emits a newer wasm feature breaks the build. `--all-features` accepts
+# whatever rustc produces; naming features individually (this was once --enable-bulk-memory,
+# for the memory.copy that opt-level "z" emits) means revisiting this on every upgrade.
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ['-Oz', '--enable-bulk-memory']
+wasm-opt = ['-Oz', '--all-features']
