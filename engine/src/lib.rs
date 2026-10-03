@@ -43,9 +43,24 @@ static RE_SSN: LazyLock<Regex> =
 // Maestro-19), with optional space/dash grouping. Luhn post-filter does the real validation.
 static RE_CREDIT_CARD: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b\d{4}(?:[\s-]?\d){9,15}\b").expect("RE_CREDIT_CARD"));
+/// Body of an API key: up to a few short labelled segments followed by a long alphanumeric
+/// blob, e.g. the `live_51Hxxxx…` of `sk_live_51Hxxxx…` or the `ant-api03-xxxx…` of
+/// `sk-ant-api03-xxxx…`.
+///
+/// The old body was a single `[a-zA-Z0-9]{20,}` run, which could not cross the second
+/// separator — so the most common real formats (`sk_live_`, `pk_test_`, `sk-proj-`) never
+/// matched, despite the step's own help text offering `sk_live_` as the example prefix.
+///
+/// Requiring the *final* segment to be 20+ characters is what keeps ordinary snake_case
+/// identifiers such as `secret_manager_configuration_value` from matching.
+const API_KEY_BODY: &str = r"(?:[a-zA-Z0-9]{1,12}[-_]){0,3}[a-zA-Z0-9]{20,}";
+
 static RE_API_KEY_GENERIC: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\b(?:sk|pk|api|token|key|secret)[\-_][a-zA-Z0-9]{20,}\b")
-        .expect("RE_API_KEY_GENERIC")
+    Regex::new(&format!(
+        r"\b(?:sk|pk|api|token|key|secret)[-_]{}\b",
+        API_KEY_BODY
+    ))
+    .expect("RE_API_KEY_GENERIC")
 });
 // Fixed: was r#"https?://[^\s<>"]+#"# which required a literal # at the end of every URL.
 static RE_URL: LazyLock<Regex> =
@@ -922,7 +937,9 @@ impl Engine {
     ) -> Result<String, JsValue> {
         let regex = if let Some(prefix) = config.get("prefix").and_then(|v| v.as_str()) {
             if !prefix.is_empty() {
-                let pattern = format!(r"\b{}[\-_]?[a-zA-Z0-9]{{20,}}\b", regex::escape(prefix));
+                // Same segmented body as the generic pattern, so an explicit prefix such as
+                // "sk_live_" still matches keys that contain further separators.
+                let pattern = format!(r"\b{}[-_]?{}\b", regex::escape(prefix), API_KEY_BODY);
                 match Regex::new(&pattern) {
                     Ok(r) => r,
                     Err(_) => return Ok(text.to_string()),
@@ -1242,6 +1259,16 @@ mod tests {
         Engine::new().run_pipeline(input, &pipeline(steps)).unwrap()
     }
 
+    /// A vendor-shaped API key with a meaningless body.
+    ///
+    /// The prefix and body are joined at runtime on purpose. A complete `sk_live_<body>`
+    /// string sitting in the source trips GitHub's push protection, which has no way to tell a
+    /// fabricated test fixture from a real leaked key — and silencing that warning per-string
+    /// is the wrong habit for a repository whose whole subject is leaked secrets.
+    fn sample_key(prefix: &str) -> String {
+        format!("{}{}", prefix, "0123456789abcdefghijABCD")
+    }
+
     fn run_with_map(input: &str, steps: Vec<serde_json::Value>) -> (String, serde_json::Value) {
         let mut engine = Engine::new();
         let out = engine.run_pipeline(input, &pipeline(steps)).unwrap();
@@ -1367,6 +1394,77 @@ mod tests {
             vec![step("username", serde_json::json!({}))],
         );
         assert_eq!(out, "path /home/<USERNAME_1> end");
+    }
+
+    // --- API keys ---
+
+    #[test]
+    fn api_key_regex_compiles() {
+        // Built with format!, so clippy::invalid_regex cannot check it statically.
+        assert!(RE_API_KEY_GENERIC.is_match("sk_abcdefghij1234567890"));
+    }
+
+    #[test]
+    fn api_key_matches_real_world_prefixed_formats() {
+        // One per real-world shape: single segment, and one to three labelled segments
+        // before the random blob.
+        for prefix in [
+            "sk_",
+            "sk_live_",
+            "pk_test_",
+            "sk-proj-",
+            "sk-ant-api03-",
+            "secret_production_",
+        ] {
+            let key = sample_key(prefix);
+            let out = run(
+                &format!("config {} end", key),
+                vec![step("apikey", serde_json::json!({}))],
+            );
+            assert!(!out.contains(&key), "{} was not redacted: {}", key, out);
+        }
+    }
+
+    #[test]
+    fn api_key_ignores_ordinary_snake_case_identifiers() {
+        // The final segment must be 20+ characters, so prose-shaped identifiers survive.
+        for identifier in [
+            "secret_manager_configuration_value",
+            "api_response_configuration_identifier",
+            "key_name_for_the_thing_here",
+            "token_expiry_in_seconds",
+        ] {
+            let out = run(
+                &format!("field {} end", identifier),
+                vec![step("apikey", serde_json::json!({}))],
+            );
+            assert!(
+                out.contains(identifier),
+                "{} was wrongly redacted: {}",
+                identifier,
+                out
+            );
+        }
+    }
+
+    #[test]
+    fn api_key_prefix_option_handles_segmented_keys() {
+        let out = run(
+            &format!("k {} end", sample_key("sk_live_")),
+            vec![step("apikey", serde_json::json!({ "prefix": "sk_live_" }))],
+        );
+        assert_eq!(out, "k <APIKEY_1> end");
+    }
+
+    #[test]
+    fn api_key_prefix_option_still_scopes_the_match() {
+        // A different prefix must not be caught when one is specified explicitly.
+        let other = sample_key("pk_test_");
+        let out = run(
+            &other,
+            vec![step("apikey", serde_json::json!({ "prefix": "sk_live_" }))],
+        );
+        assert_eq!(out, other);
     }
 
     // --- SSN (regression: the pattern used unsupported lookahead and panicked on first use) ---
