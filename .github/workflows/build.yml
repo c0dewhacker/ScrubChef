@@ -46,7 +46,11 @@ jobs:
       - name: Install wasm-pack
         uses: jetli/wasm-pack-action@v0.4.0
         with:
-          version: latest
+          # Pinned, not `latest`: the action resolves "latest" at run time and silently falls
+          # back to its own 2020-era default (v0.9.1) when that lookup fails. That shipped a
+          # wasm-opt too old to validate the features current rustc emits, so the same commit
+          # passed on a pull request and failed on master hours later.
+          version: v0.15.0
 
       - name: Build WASM engine
         run: wasm-pack build --target web
