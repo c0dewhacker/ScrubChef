@@ -1,5 +1,10 @@
-# getrandom 0.3+ refuses to build for wasm32-unknown-unknown unless its web backend is
-# selected explicitly. The `wasm_js` Cargo feature alone is not enough — the backend is
-# chosen by this cfg flag. Keeping it here means `wasm-pack build` works with no extra env.
+# Selects getrandom's web backend for wasm32. getrandom 0.3 refused to build for
+# wasm32-unknown-unknown without this cfg — the `wasm_js` Cargo feature alone was not enough.
+# As of 0.4 the feature suffices and this is redundant, but it is kept as an explicit
+# declaration of intent: if the backend selection ever regresses, the build fails loudly here
+# rather than silently falling back to a source of randomness we have not vetted.
+#
+# Verified both ways: with and without this flag, five fresh Engines produce five distinct
+# HMAC fingerprints, so the session secret is genuinely random and not zeroed.
 [target.wasm32-unknown-unknown]
 rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

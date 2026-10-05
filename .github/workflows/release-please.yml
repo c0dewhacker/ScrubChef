@@ -24,7 +24,7 @@ jobs:
       release_created: ${{ steps.release.outputs.ui--release_created }}
       tag_name: ${{ steps.release.outputs.ui--tag_name }}
     steps:
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         id: release
         with:
           config-file: .github/release-please-config.json
@@ -68,4 +68,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
