@@ -20,7 +20,7 @@ jobs:
     name: Engine (Rust)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -51,21 +51,36 @@ jobs:
 
       # The engine's whole purpose is to run in the browser, so a native build passing is
       # not enough — the wasm32 target has its own constraints (see getrandom's backend cfg).
+      # Installed directly rather than through jetli/wasm-pack-action. That action is
+      # unmaintained (latest release 2022), still targets Node 20, and resolved its
+      # `version: latest` at run time — silently installing a 2020-era wasm-pack whose
+      # wasm-opt could not validate the features current rustc emits, which is how the same
+      # commit passed on a pull request and failed on master hours later. A pinned download
+      # with a verified checksum has none of those properties, and the toolchain that builds
+      # a redaction engine is worth verifying.
       - name: Install wasm-pack
-        uses: jetli/wasm-pack-action@v0.4.0
-        with:
-          # Pinned, not `latest`: the action resolves "latest" at run time and silently falls
-          # back to its own 2020-era default (v0.9.1) when that lookup fails. That shipped a
-          # wasm-opt too old to validate the features current rustc emits, so the same commit
-          # passed on a pull request and failed on master hours later.
-          version: v0.15.0
+        env:
+          WASM_PACK_VERSION: v0.15.0
+          WASM_PACK_SHA256: c09f971ecaed9a2efc80fdcea7a00ef6b53c7fadc8c57d1f61b53a6aa66b668a
+        run: |
+          set -euo pipefail
+          tarball="wasm-pack-${WASM_PACK_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          curl -fsSL --retry 3 \
+            "https://github.com/rustwasm/wasm-pack/releases/download/${WASM_PACK_VERSION}/${tarball}" \
+            -o "$tarball"
+          echo "${WASM_PACK_SHA256}  ${tarball}" | sha256sum --check --strict
+          tar -xzf "$tarball" --strip-components=1 \
+            "wasm-pack-${WASM_PACK_VERSION}-x86_64-unknown-linux-musl/wasm-pack"
+          install -m 0755 wasm-pack /usr/local/bin/wasm-pack
+          rm -f "$tarball" wasm-pack
+          wasm-pack --version
 
       - name: Build for wasm32
         run: wasm-pack build --target web
         working-directory: engine
 
       - name: Upload engine artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wasm-engine
           path: |
@@ -80,7 +95,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: engine
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7
         with:
@@ -90,7 +105,7 @@ jobs:
 
       # src/engine is gitignored build output, and `tsc -b` needs it to typecheck the worker.
       - name: Fetch engine artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: wasm-engine
           path: ui/src/engine
@@ -123,7 +138,7 @@ jobs:
     name: Dependency audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7
         with:
