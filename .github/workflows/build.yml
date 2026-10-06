@@ -26,7 +26,7 @@ jobs:
       artifact-name: ${{ steps.vars.outputs.artifact-name }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -43,14 +43,29 @@ jobs:
           key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('engine/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-wasm-
 
+      # Installed directly rather than through jetli/wasm-pack-action. That action is
+      # unmaintained (latest release 2022), still targets Node 20, and resolved its
+      # `version: latest` at run time — silently installing a 2020-era wasm-pack whose
+      # wasm-opt could not validate the features current rustc emits, which is how the same
+      # commit passed on a pull request and failed on master hours later. A pinned download
+      # with a verified checksum has none of those properties, and the toolchain that builds
+      # a redaction engine is worth verifying.
       - name: Install wasm-pack
-        uses: jetli/wasm-pack-action@v0.4.0
-        with:
-          # Pinned, not `latest`: the action resolves "latest" at run time and silently falls
-          # back to its own 2020-era default (v0.9.1) when that lookup fails. That shipped a
-          # wasm-opt too old to validate the features current rustc emits, so the same commit
-          # passed on a pull request and failed on master hours later.
-          version: v0.15.0
+        env:
+          WASM_PACK_VERSION: v0.15.0
+          WASM_PACK_SHA256: c09f971ecaed9a2efc80fdcea7a00ef6b53c7fadc8c57d1f61b53a6aa66b668a
+        run: |
+          set -euo pipefail
+          tarball="wasm-pack-${WASM_PACK_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          curl -fsSL --retry 3 \
+            "https://github.com/rustwasm/wasm-pack/releases/download/${WASM_PACK_VERSION}/${tarball}" \
+            -o "$tarball"
+          echo "${WASM_PACK_SHA256}  ${tarball}" | sha256sum --check --strict
+          tar -xzf "$tarball" --strip-components=1 \
+            "wasm-pack-${WASM_PACK_VERSION}-x86_64-unknown-linux-musl/wasm-pack"
+          install -m 0755 wasm-pack /usr/local/bin/wasm-pack
+          rm -f "$tarball" wasm-pack
+          wasm-pack --version
 
       - name: Build WASM engine
         run: wasm-pack build --target web
@@ -96,7 +111,7 @@ jobs:
           path: ./ui/dist
 
       - name: Upload release artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: scrubchef-html
           path: ui/dist/${{ steps.vars.outputs.artifact-name }}
