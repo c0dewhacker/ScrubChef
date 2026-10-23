@@ -6,7 +6,7 @@ description = "Local-first redaction engine for ScrubChef, compiled to WebAssemb
 repository = "https://github.com/c0dewhacker/ScrubChef"
 license = "MIT"
 # LazyLock (std) requires 1.80; edition 2024 requires 1.85.
-rust-version = "1.85"
+rust-version = "1.87"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
