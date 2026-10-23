@@ -180,7 +180,7 @@ fn luhn_check(s: &str) -> bool {
             }
         })
         .sum();
-    sum % 10 == 0
+    sum.is_multiple_of(10)
 }
 
 // Characters of surrounding text kept with each canonical entry for the UI tooltip.
